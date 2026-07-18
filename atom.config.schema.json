@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Atom-js-org/atom/blob/main/atom.config.schema.json",
+  "title": "AtomJS configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "appId": { "type": "string", "minLength": 1 },
+    "productName": { "type": "string", "minLength": 1 },
+    "main": { "type": "string", "minLength": 1 },
+    "icon": { "type": ["string", "null"] },
+    "files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "installerCredit": { "type": "boolean", "default": true },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": { "type": "string", "default": "atom-build.yml" }
+      }
+    }
+  }
+}

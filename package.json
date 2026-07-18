@@ -1,0 +1,38 @@
+{
+  "name": "@atom-js-org/monorepo",
+  "version": "0.2.0-alpha.0",
+  "private": true,
+  "description": "Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "atom": "node packages/cli/bin/atom.cjs",
+    "doctor": "node packages/cli/bin/atom.cjs doctor",
+    "test": "node --test tests/*.test.cjs",
+    "verify:electron": "node scripts/verify-electron-compat.cjs",
+    "pack:dry": "npm pack ./packages/atomjs --dry-run && npm pack ./packages/electron-compat --dry-run && npm pack ./packages/cli --dry-run"
+  },
+  "dependencies": {
+    "@atom-js-org/runtime": "file:packages/atomjs",
+    "electron": "file:packages/electron-compat"
+  },
+  "devDependencies": {
+    "@atom-js-org/cli": "file:packages/cli"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Atom-js-org/atom.git"
+  },
+  "homepage": "https://github.com/Atom-js-org/atom#readme",
+  "bugs": {
+    "url": "https://github.com/Atom-js-org/atom/issues"
+  },
+  "license": "LicenseRef-AtomJS-1.0",
+  "overrides": {
+    "tar": "7.5.20"
+  }
+}

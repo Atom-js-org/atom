@@ -1,0 +1,41 @@
+{
+  "name": "@atom-js-org/runtime",
+  "version": "0.2.0-alpha.0",
+  "description": "Electron-like desktop runtime powered by the operating system WebView.",
+  "main": "src/index.cjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./src/index.cjs",
+      "default": "./src/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Atom-js-org/atom.git",
+    "directory": "packages/atomjs"
+  },
+  "homepage": "https://github.com/Atom-js-org/atom#readme",
+  "bugs": {
+    "url": "https://github.com/Atom-js-org/atom/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "LicenseRef-AtomJS-1.0"
+}

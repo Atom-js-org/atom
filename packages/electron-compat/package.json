@@ -1,0 +1,62 @@
+{
+  "name": "@atom-js-org/electron",
+  "version": "0.2.0-alpha.0",
+  "description": "Electron-compatible API facade powered by AtomJS without bundling Electron or a private Chromium runtime.",
+  "main": "index.cjs",
+  "module": "index.mjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    },
+    "./main": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    },
+    "./renderer": {
+      "types": "./renderer.d.ts",
+      "import": "./renderer.mjs",
+      "require": "./renderer.cjs"
+    },
+    "./common": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.cjs",
+    "index.mjs",
+    "index.d.ts",
+    "renderer.cjs",
+    "renderer.mjs",
+    "renderer.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "@atom-js-org/runtime": "0.2.0-alpha.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Atom-js-org/atom.git",
+    "directory": "packages/electron-compat"
+  },
+  "homepage": "https://github.com/Atom-js-org/atom#readme",
+  "bugs": {
+    "url": "https://github.com/Atom-js-org/atom/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "LicenseRef-AtomJS-1.0",
+  "atomjsElectronCompatibility": true
+}

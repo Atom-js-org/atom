@@ -1,0 +1,109 @@
+<p align="center">
+  <img src="assets/atomjs-logo.png" width="280" alt="AtomJS logo">
+</p>
+
+# AtomJS
+
+**Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.**
+
+AtomJS keeps the Electron development model while rendering with the operating system WebView instead of shipping a private Chromium runtime in every application.
+
+```js
+const { app, BrowserWindow, ipcMain } = require('electron');
+const path = require('node:path');
+
+app.whenReady().then(() => {
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  win.loadFile('index.html');
+});
+
+ipcMain.handle('files:read', async (_event, filePath) => {
+  return require('node:fs/promises').readFile(filePath, 'utf8');
+});
+```
+
+AtomJS publishes the facade as `@atom-js-org/electron`. Applications install it with the local alias `electron`, so dependencies that call `require('electron')` or `import('electron')` resolve to AtomJS rather than the Electron runtime.
+
+That means packages such as MSMC do not need an AtomJS-specific release merely to locate `BrowserWindow`:
+
+```js
+const { BrowserWindow } = require('electron');
+```
+
+The facade supports CommonJS, ESM, `electron/main`, `electron/renderer`, preload `contextBridge`, and Electron runtime detection through `process.versions.electron`.
+
+## CLI
+
+```bash
+atom run dev
+atom run build
+
+atom build windows
+atom build macos
+atom build linux
+atom build all
+```
+
+Build artifacts are written to:
+
+```text
+build/
+├── windows/
+├── macos/
+└── linux/
+```
+
+A local build is created when the requested target matches the host OS. Cross-OS and `all` builds are delegated to the included GitHub Actions workflow and downloaded into the same `build/<os>` layout.
+
+## Architecture
+
+AtomJS mirrors Electron's familiar split:
+
+- **Main process:** regular Node.js; owns application lifecycle, filesystem access, dependencies, and privileged APIs.
+- **BrowserWindow:** launches a native system WebView in an isolated window-host process.
+- **Renderer:** ordinary HTML, CSS, and browser JavaScript.
+- **Preload bridge:** supports `require('electron')`, `contextBridge`, and `ipcRenderer`.
+- **IPC:** authenticated localhost WebSocket transport between the renderer and Node.js main process.
+- **Compatibility facade:** exposes Electron-style module names to application code and transitive npm dependencies.
+
+AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux. WebView2 uses the Microsoft Edge rendering engine, so Windows still uses a Chromium-derived system engine, but AtomJS does not ship its own Chromium copy. Windows and Linux currently use the small `webview-nodejs` adapter; macOS uses the built-in JavaScript for Automation runtime and does not require a compiled addon for development runs.
+
+## Electron compatibility
+
+AtomJS 0.2 provides an Electron-compatible package that is installed locally under the alias `electron`, backed by AtomJS rather than Electron. It currently includes the working core (`app`, `BrowserWindow`, `webContents`, IPC, dialogs, shell, clipboard, menus-as-data, session compatibility, navigation events, and preload APIs) plus compatibility surfaces for many commonly imported Electron modules.
+
+Chromium-specific behavior and native platform features cannot become identical merely by changing the module name. APIs that are not implemented by the system-WebView runtime remain explicit compatibility stubs rather than silently pretending to work. The project goal is to expand functional Electron compatibility release by release while keeping the runtime lightweight.
+
+## Important technical truth
+
+AtomJS contains no Rust. On macOS, the window host is JavaScript executed by `osascript` and talks to AppKit and WKWebView. Windows and Linux still require a thin native adapter because plain Node.js does not expose WebView2 or WebKitGTK APIs. AtomJS does not bundle Chromium.
+
+This is an **alpha foundation**, not yet a production-complete reimplementation of every Electron API. The 0.2 compatibility layer fixes Electron-oriented dependencies such as MSMC resolving the module and adds repeated `did-finish-load` navigation events needed by OAuth flows.
+
+## Install this repository
+
+```bash
+npm install
+npm test
+npm run verify:electron
+```
+
+## Create an application after the alpha packages are published
+
+```bash
+npm install electron@npm:@atom-js-org/electron@alpha
+npm install --save-dev @atom-js-org/cli@alpha
+```
+
+On macOS, AtomJS uses the built-in WKWebView host and does not require `webview-nodejs` for development runs. Linux and Windows currently use a thin native system-WebView adapter. Run `npx atom doctor` for platform checks.
+
+## License
+
+Framework forks and redistributions are permitted, but must retain the AtomJS notice and GitHub link. Applications built with AtomJS do **not** have to display AtomJS credit. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

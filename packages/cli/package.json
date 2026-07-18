@@ -1,0 +1,38 @@
+{
+  "name": "@atom-js-org/cli",
+  "version": "0.2.0-alpha.0",
+  "description": "CLI for running and building AtomJS desktop applications.",
+  "bin": {
+    "atom": "bin/atom.cjs"
+  },
+  "main": "src/index.cjs",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "archiver": "7.0.1",
+    "commander": "^15.0.0",
+    "fs-extra": "^11.3.6",
+    "postject": "1.0.0-alpha.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Atom-js-org/atom.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Atom-js-org/atom#readme",
+  "bugs": {
+    "url": "https://github.com/Atom-js-org/atom/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "LicenseRef-AtomJS-1.0"
+}

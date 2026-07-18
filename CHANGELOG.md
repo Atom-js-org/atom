@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0-alpha.0
+
+### Native macOS application host
+
+- Replaced the per-window `osascript`/JXA process with one shared Cocoa and WKWebView host.
+- Multiple `BrowserWindow` instances now belong to one macOS application process and Dock identity.
+- Added native macOS show, hide, focus, title, bounds, minimize, maximize, restore, fullscreen, reload, and navigation commands.
+- macOS builds compile and sign the native host with the system SDK and verify the resulting `.app` bundle.
+
+### Native packaging
+
+- macOS application code and production dependencies are compressed and embedded in the SEA executable instead of being shipped as a visible `Resources/app` source directory.
+- Removed the separate `Resources/runtime/node` file from macOS bundles.
+- `atom run build` now opens the generated `.app` bundle through Launch Services.
+- Added CI assertions for the native host and embedded application payload.
+
 ## 0.2.0-alpha.0
 
 ### Electron compatibility

@@ -25,12 +25,18 @@ class WebContents extends EventEmitter {
 
   reload() {
     ensureAlive(this.owner);
-    state.bridgeServer.send(this.owner.id, { type: 'system', command: 'reload' });
+    if (!this.owner._sendHostCommand({ command: 'reload' })) {
+      state.bridgeServer.send(this.owner.id, { type: 'system', command: 'reload' });
+    }
   }
 
   loadURL(url) {
     ensureAlive(this.owner);
-    state.bridgeServer.send(this.owner.id, { type: 'system', command: 'navigate', url: String(url) });
+    const value = String(url);
+    this.owner._currentUrl = value;
+    if (!this.owner._sendHostCommand({ command: 'navigate', url: value })) {
+      state.bridgeServer.send(this.owner.id, { type: 'system', command: 'navigate', url: value });
+    }
   }
 
   openDevTools() {

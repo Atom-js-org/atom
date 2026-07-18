@@ -70,14 +70,27 @@ test('bridge serves files and handles invoke IPC', async (t) => {
   });
 });
 
-test('ships a macOS JavaScript WKWebView host without the native binding', () => {
+test('ships one native macOS WKWebView host without osascript', () => {
   const runtimeRoot = path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'runtime');
-  const host = fs.readFileSync(path.join(runtimeRoot, 'window-host.mjs'), 'utf8');
-  const macHost = fs.readFileSync(path.join(runtimeRoot, 'macos-window-host.jxa.js'), 'utf8');
-  assert.match(host, /process\.platform === 'darwin'/);
-  assert.match(host, /osascript/);
-  assert.match(macHost, /WKWebView/);
-  assert.match(macHost, /WKUserScriptInjectionTimeAtDocumentStart/);
+  const legacyHost = fs.readFileSync(path.join(runtimeRoot, 'window-host.mjs'), 'utf8');
+  const nativeHost = fs.readFileSync(path.join(runtimeRoot, 'macos-native-host.m'), 'utf8');
+  const manager = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'native-host.cjs'), 'utf8');
+
+  assert.doesNotMatch(legacyHost, /osascript/);
+  assert.match(nativeHost, /WKWebView/);
+  assert.match(nativeHost, /WKUserScriptInjectionTimeAtDocumentStart/);
+  assert.match(nativeHost, /NSMutableDictionary<NSNumber \*, AtomJSWindowController \*>/);
+  assert.match(manager, /let singleton = null/);
+  assert.match(manager, /command: 'create'/);
+});
+
+test('macOS builds embed the project payload and produce a real app bundle', () => {
+  const build = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  assert.match(build, /assets: \{ 'atom-app': payloadPath \}/);
+  assert.match(build, /getAsset\('atom-app'\)/);
+  assert.match(build, /AtomJSWindowHost/);
+  assert.match(build, /codesign[\s\S]*--verify[\s\S]*--deep[\s\S]*--strict/);
+  assert.doesNotMatch(build, /Resources', 'app'/);
 });
 
 test('public load methods suppress fire-and-forget unhandled rejections', () => {

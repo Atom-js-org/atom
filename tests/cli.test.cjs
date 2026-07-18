@@ -49,3 +49,28 @@ test('CLI provisions a lightweight electron facade for transitive dependencies',
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
+
+test('macOS embedded payload dereferences directory symlinks', async () => {
+  const zlib = require('node:zlib');
+  const { createApplicationPayload } = require('../packages/cli/src/build.cjs');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-payload-'));
+  const appRoot = path.join(tempRoot, 'app');
+  const packageRoot = path.join(appRoot, 'vendor', 'runtime');
+  const linkedRoot = path.join(appRoot, 'node_modules', '@atom-js-org', 'runtime');
+  const output = path.join(tempRoot, 'payload.gz');
+
+  fs.mkdirSync(path.join(packageRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"@atom-js-org/runtime"}');
+  fs.writeFileSync(path.join(packageRoot, 'src', 'index.cjs'), 'module.exports = 1;');
+  fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
+  fs.symlinkSync(packageRoot, linkedRoot, 'dir');
+
+  await createApplicationPayload(appRoot, output);
+  const archive = JSON.parse(zlib.gunzipSync(fs.readFileSync(output)).toString('utf8'));
+  const paths = new Set(archive.files.map((entry) => entry.path));
+
+  assert.ok(paths.has('node_modules/@atom-js-org/runtime/package.json'));
+  assert.ok(paths.has('node_modules/@atom-js-org/runtime/src/index.cjs'));
+
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});

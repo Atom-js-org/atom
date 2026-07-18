@@ -1,4 +1,4 @@
-name: AtomJS Alpha CI
+name: AtomJS CI
 
 on:
   push:
@@ -25,6 +25,15 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run verify:electron
+      - name: Build and verify native macOS app
+        if: runner.os == 'macOS'
+        run: |
+          node packages/cli/bin/atom.cjs build macos --local --project tests/fixtures/macos-smoke
+          test -x "tests/fixtures/macos-smoke/build/macos/AtomJS Smoke.app/Contents/MacOS/AtomJS Smoke"
+          test -x "tests/fixtures/macos-smoke/build/macos/AtomJS Smoke.app/Contents/MacOS/AtomJSWindowHost"
+          test ! -d "tests/fixtures/macos-smoke/build/macos/AtomJS Smoke.app/Contents/Resources/app"
+          test ! -e "tests/fixtures/macos-smoke/build/macos/AtomJS Smoke.app/Contents/Resources/runtime/node"
+          codesign --verify --deep --strict "tests/fixtures/macos-smoke/build/macos/AtomJS Smoke.app"
 
   package-preview:
     runs-on: ubuntu-latest

@@ -52,54 +52,90 @@ async function localBuild(project, target, options = {}) {
 
   const stageRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'atomjs-stage-'));
   const stagedApp = path.join(stageRoot, 'app');
+  const payloadPath = path.join(stageRoot, 'atom-app.payload.gz');
+
   try {
     await copyApplication(project.root, stagedApp);
     await vendorFramework(stagedApp, project, target);
     await installProductionDependencies(stagedApp, options.skipInstall, target);
-    await fse.move(stagedApp, appDir, { overwrite: true });
+
+    if (target === 'macos') {
+      console.log('Embedding application code and production dependencies into the native executable...');
+      await createApplicationPayload(stagedApp, payloadPath);
+    } else {
+      await fse.move(stagedApp, appDir, { overwrite: true });
+    }
+
+    if (target !== 'macos') {
+      const runtimeDir = path.join(unpacked, 'runtime');
+      await fse.ensureDir(runtimeDir);
+      const runtimeNodeName = target === 'windows' ? 'node.exe' : 'node';
+      const runtimeNodePath = path.join(runtimeDir, runtimeNodeName);
+      await fs.promises.copyFile(process.execPath, runtimeNodePath);
+      if (target !== 'windows') await fs.promises.chmod(runtimeNodePath, 0o755);
+    }
+
+    const executableName = target === 'windows' ? `${productName}.exe` : productName;
+    const executablePath = path.join(unpacked, executableName);
+    await createSeaLauncher({
+      executablePath,
+      appDir,
+      target,
+      productName,
+      payloadPath: target === 'macos' ? payloadPath : null
+    });
+
+    const creditPath = path.join(unpacked, 'ATOMJS-CREDIT.txt');
+    await fs.promises.writeFile(
+      creditPath,
+      'Built with AtomJS\nhttps://github.com/Atom-js-org/atom\nCredit is optional inside applications.\n',
+      'utf8'
+    );
+
+    let outputs = [];
+    let runPath = executablePath;
+    let unpackedPath = unpacked;
+
+    if (target === 'windows') {
+      outputs = await packageWindows({ project, buildRoot, unpacked, executableName, productName });
+    }
+    if (target === 'macos') {
+      const packaged = await packageMacOS({
+        project,
+        buildRoot,
+        unpacked,
+        executableName,
+        productName,
+        hostSource: path.join(resolveFrameworkRoot(project.root), 'src', 'runtime', 'macos-native-host.m')
+      });
+      outputs = packaged.outputs;
+      runPath = packaged.appBundle;
+      unpackedPath = packaged.appBundle;
+      await fse.remove(unpacked);
+    }
+    if (target === 'linux') {
+      outputs = await packageLinux({ project, buildRoot, unpacked, executableName, productName });
+    }
+
+    const manifest = {
+      atomjsVersion: '0.3.0-alpha.0',
+      target,
+      productName,
+      appId: project.config.appId,
+      createdAt: new Date().toISOString(),
+      run: path.relative(buildRoot, runPath),
+      unpacked: path.relative(buildRoot, unpackedPath),
+      outputs: outputs.map((file) => path.relative(buildRoot, file))
+    };
+    await fs.promises.writeFile(path.join(buildRoot, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+    console.log('\nBuild complete:');
+    console.log(`  ${path.relative(project.root, unpackedPath)}`);
+    for (const output of outputs) console.log(`  ${path.relative(project.root, output)}`);
+    return manifest;
   } finally {
     await fse.remove(stageRoot);
   }
-
-  const runtimeDir = path.join(unpacked, 'runtime');
-  await fse.ensureDir(runtimeDir);
-  const runtimeNodeName = target === 'windows' ? 'node.exe' : 'node';
-  const runtimeNodePath = path.join(runtimeDir, runtimeNodeName);
-  await fs.promises.copyFile(process.execPath, runtimeNodePath);
-  if (target !== 'windows') await fs.promises.chmod(runtimeNodePath, 0o755);
-
-  const executableName = target === 'windows' ? `${productName}.exe` : productName;
-  const executablePath = path.join(unpacked, executableName);
-  await createSeaLauncher({ executablePath, appDir, target });
-
-  const creditPath = path.join(unpacked, 'ATOMJS-CREDIT.txt');
-  await fs.promises.writeFile(
-    creditPath,
-    'Built with AtomJS\nhttps://github.com/Atom-js-org/atom\nCredit is optional inside applications.\n',
-    'utf8'
-  );
-
-  const outputs = [];
-  if (target === 'windows') outputs.push(...await packageWindows({ project, buildRoot, unpacked, executableName, productName }));
-  if (target === 'macos') outputs.push(...await packageMacOS({ project, buildRoot, unpacked, executableName, productName }));
-  if (target === 'linux') outputs.push(...await packageLinux({ project, buildRoot, unpacked, executableName, productName }));
-
-  const manifest = {
-    atomjsVersion: '0.2.0-alpha.0',
-    target,
-    productName,
-    appId: project.config.appId,
-    createdAt: new Date().toISOString(),
-    run: path.relative(buildRoot, executablePath),
-    unpacked: path.relative(buildRoot, unpacked),
-    outputs: outputs.map((file) => path.relative(buildRoot, file))
-  };
-  await fs.promises.writeFile(path.join(buildRoot, 'manifest.json'), JSON.stringify(manifest, null, 2));
-
-  console.log('\nBuild complete:');
-  console.log(`  ${path.relative(project.root, unpacked)}`);
-  for (const output of outputs) console.log(`  ${path.relative(project.root, output)}`);
-  return manifest;
 }
 
 async function copyApplication(projectRoot, appDir) {
@@ -188,43 +224,69 @@ async function installProductionDependencies(appDir, skipInstall, target) {
   }
 }
 
-async function createSeaLauncher({ executablePath, appDir, target }) {
+async function createApplicationPayload(appDir, outputPath) {
+  const files = [];
+
+  async function addFile(source, relative, stat) {
+    files.push({
+      path: relative.split(path.sep).join('/'),
+      mode: stat.mode & 0o777,
+      data: (await fs.promises.readFile(source)).toString('base64')
+    });
+  }
+
+  async function visit(directory, relativePrefix = '', ancestors = new Set()) {
+    const realDirectory = await fs.promises.realpath(directory);
+    if (ancestors.has(realDirectory)) return;
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(realDirectory);
+
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      const relative = relativePrefix ? path.join(relativePrefix, entry.name) : entry.name;
+
+      if (entry.isDirectory()) {
+        await visit(absolute, relative, nextAncestors);
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        const resolved = await fs.promises.realpath(absolute);
+        const stat = await fs.promises.stat(resolved);
+        if (stat.isDirectory()) {
+          await visit(resolved, relative, nextAncestors);
+        } else if (stat.isFile()) {
+          await addFile(resolved, relative, stat);
+        }
+        continue;
+      }
+
+      if (entry.isFile()) {
+        const stat = await fs.promises.stat(absolute);
+        await addFile(absolute, relative, stat);
+      }
+    }
+  }
+
+  await visit(appDir);
+  const payload = Buffer.from(JSON.stringify({ format: 1, files }));
+  const compressed = require('node:zlib').gzipSync(payload, { level: 9 });
+  await fs.promises.writeFile(outputPath, compressed);
+}
+
+async function createSeaLauncher({ executablePath, appDir, target, productName, payloadPath = null }) {
   const work = path.join(path.dirname(executablePath), '.sea-' + crypto.randomBytes(5).toString('hex'));
   await fse.ensureDir(work);
   const launcherPath = path.join(work, 'launcher.cjs');
   const blobPath = path.join(work, target === 'windows' ? 'sea-prep.blob.exe' : 'sea-prep.blob');
   const configPath = path.join(work, 'sea-config.json');
 
-  const launcher = `
-'use strict';
-const path = require('node:path');
-const fs = require('node:fs');
-const { createRequire } = require('node:module');
-
-const executableDir = path.dirname(process.execPath);
-const appDir = process.platform === 'darwin' && executableDir.includes('.app' + path.sep + 'Contents' + path.sep + 'MacOS')
-  ? path.resolve(executableDir, '..', 'Resources', 'app')
-  : path.join(executableDir, 'app');
-
-const packagePath = path.join(appDir, 'package.json');
-if (!fs.existsSync(packagePath)) {
-  console.error('AtomJS application files are missing:', appDir);
-  process.exit(1);
-}
-
-const runtimeNode = process.platform === 'darwin' && executableDir.includes('.app' + path.sep + 'Contents' + path.sep + 'MacOS')
-  ? path.resolve(executableDir, '..', 'Resources', 'runtime', 'node')
-  : path.join(executableDir, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-
-process.chdir(appDir);
-process.env.ATOM_PROJECT_ROOT = appDir;
-process.env.ATOM_BUILD = '1';
-process.env.ATOM_NODE_EXECUTABLE = runtimeNode;
-const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-const mainPath = path.resolve(appDir, pkg.main || 'main.js');
-const load = createRequire(packagePath);
-load(mainPath);
-`;
+  const launcher = payloadPath
+    ? createEmbeddedLauncherSource(productName)
+    : createLooseLauncherSource();
   await fs.promises.writeFile(launcherPath, launcher, 'utf8');
 
   const seaConfig = {
@@ -232,7 +294,8 @@ load(mainPath);
     output: blobPath,
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
-    useCodeCache: false
+    useCodeCache: false,
+    ...(payloadPath ? { assets: { 'atom-app': payloadPath } } : {})
   };
   await fs.promises.writeFile(configPath, JSON.stringify(seaConfig, null, 2));
 
@@ -250,9 +313,96 @@ load(mainPath);
 
   if (target !== 'windows') await fs.promises.chmod(executablePath, 0o755);
   if (target === 'macos' && commandExists('codesign', ['--version'])) {
-    await run('codesign', ['--sign', '-', executablePath]);
+    await run('codesign', ['--force', '--sign', '-', executablePath]);
   }
   await fse.remove(work);
+}
+
+function createLooseLauncherSource() {
+  return `
+'use strict';
+const path = require('node:path');
+const fs = require('node:fs');
+const { createRequire } = require('node:module');
+
+const executableDir = path.dirname(process.execPath);
+const appDir = path.join(executableDir, 'app');
+const packagePath = path.join(appDir, 'package.json');
+if (!fs.existsSync(packagePath)) {
+  console.error('AtomJS application files are missing:', appDir);
+  process.exit(1);
+}
+
+const runtimeNode = path.join(executableDir, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
+process.chdir(appDir);
+process.env.ATOM_PROJECT_ROOT = appDir;
+process.env.ATOM_BUILD = '1';
+process.env.ATOM_NODE_EXECUTABLE = runtimeNode;
+const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const mainPath = path.resolve(appDir, pkg.main || 'main.js');
+const load = createRequire(packagePath);
+load(mainPath);
+`;
+}
+
+function createEmbeddedLauncherSource(productName) {
+  return `
+'use strict';
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { createRequire } = require('node:module');
+const { getAsset } = require('node:sea');
+
+const productName = ${JSON.stringify(productName)};
+const payload = Buffer.from(getAsset('atom-app'));
+const payloadHash = crypto.createHash('sha256').update(payload).digest('hex').slice(0, 24);
+const dataRoot = process.platform === 'darwin'
+  ? path.join(os.homedir(), 'Library', 'Application Support')
+  : process.platform === 'win32'
+    ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
+    : (process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'));
+const appDir = path.join(dataRoot, productName, 'AtomJS Runtime', payloadHash);
+const marker = path.join(appDir, '.atom-ready');
+
+if (!fs.existsSync(marker)) {
+  const temporary = appDir + '.tmp-' + process.pid;
+  fs.rmSync(temporary, { recursive: true, force: true });
+  fs.mkdirSync(temporary, { recursive: true });
+  const archive = JSON.parse(zlib.gunzipSync(payload).toString('utf8'));
+  if (!archive || archive.format !== 1 || !Array.isArray(archive.files)) {
+    throw new Error('AtomJS embedded application payload is invalid.');
+  }
+
+  for (const entry of archive.files) {
+    const destination = path.resolve(temporary, String(entry.path));
+    const root = path.resolve(temporary) + path.sep;
+    if (!destination.startsWith(root)) throw new Error('Unsafe path in AtomJS application payload.');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, Buffer.from(entry.data, 'base64'));
+    if (process.platform !== 'win32' && Number.isInteger(entry.mode)) fs.chmodSync(destination, entry.mode);
+  }
+  fs.writeFileSync(path.join(temporary, '.atom-ready'), payloadHash);
+  fs.mkdirSync(path.dirname(appDir), { recursive: true });
+  fs.rmSync(appDir, { recursive: true, force: true });
+  fs.renameSync(temporary, appDir);
+}
+
+const packagePath = path.join(appDir, 'package.json');
+if (!fs.existsSync(packagePath)) throw new Error('AtomJS could not materialize the embedded application.');
+
+const executableDir = path.dirname(process.execPath);
+process.chdir(appDir);
+process.env.ATOM_PROJECT_ROOT = appDir;
+process.env.ATOM_BUILD = '1';
+process.env.ATOM_MACOS_HOST_EXECUTABLE = path.join(executableDir, 'AtomJSWindowHost');
+const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const mainPath = path.resolve(appDir, pkg.main || 'main.js');
+const load = createRequire(packagePath);
+load(mainPath);
+`;
 }
 
 async function packageWindows({ project, buildRoot, unpacked, executableName, productName }) {
@@ -305,19 +455,49 @@ SectionEnd
   return outputs;
 }
 
-async function packageMacOS({ project, buildRoot, unpacked, executableName, productName }) {
+async function packageMacOS({ project, buildRoot, unpacked, executableName, productName, hostSource }) {
   const outputs = [];
   const appBundle = path.join(buildRoot, `${productName}.app`);
   const contents = path.join(appBundle, 'Contents');
   const macosDir = path.join(contents, 'MacOS');
   const resources = path.join(contents, 'Resources');
+  const mainExecutable = path.join(macosDir, productName);
+  const nativeHost = path.join(macosDir, 'AtomJSWindowHost');
+
   await fse.ensureDir(macosDir);
   await fse.ensureDir(resources);
-  await fse.copy(path.join(unpacked, executableName), path.join(macosDir, productName));
-  await fse.copy(path.join(unpacked, 'app'), path.join(resources, 'app'));
-  await fse.copy(path.join(unpacked, 'runtime'), path.join(resources, 'runtime'));
+  await fse.copy(path.join(unpacked, executableName), mainExecutable);
   await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(resources, 'ATOMJS-CREDIT.txt'));
+  await fs.promises.chmod(mainExecutable, 0o755);
 
+  if (!fs.existsSync(hostSource)) {
+    throw new Error(`AtomJS macOS native host source was not found: ${hostSource}`);
+  }
+  if (!commandExists('/usr/bin/xcrun', ['--version'])) {
+    throw new Error('macOS builds require the Xcode Command Line Tools. Run `xcode-select --install`.');
+  }
+
+  await run('/usr/bin/xcrun', [
+    'clang',
+    '-fobjc-arc',
+    '-fmodules',
+    '-mmacosx-version-min=12.0',
+    '-framework', 'Cocoa',
+    '-framework', 'WebKit',
+    hostSource,
+    '-o', nativeHost
+  ]);
+  await fs.promises.chmod(nativeHost, 0o755);
+
+  let iconEntry = '';
+  const iconSource = project.config.icon ? path.resolve(project.root, project.config.icon) : null;
+  if (iconSource && fs.existsSync(iconSource) && path.extname(iconSource).toLowerCase() === '.icns') {
+    await fse.copy(iconSource, path.join(resources, 'AppIcon.icns'));
+    iconEntry = '<key>CFBundleIconFile</key><string>AppIcon</string>';
+  }
+
+  const version = String(project.packageJson.version || '0.0.0');
+  const bundleVersion = (version.match(/\d+/g) || ['1']).slice(0, 3).join('.');
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -326,13 +506,25 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
 <key>CFBundleName</key><string>${xml(productName)}</string>
 <key>CFBundleDisplayName</key><string>${xml(productName)}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>${xml(project.packageJson.version || '0.0.0')}</string>
+<key>CFBundleShortVersionString</key><string>${xml(version)}</string>
+<key>CFBundleVersion</key><string>${xml(bundleVersion)}</string>
+<key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
+${iconEntry}
 </dict></plist>`;
-  await fs.promises.writeFile(path.join(contents, 'Info.plist'), plist, 'utf8');
-  await fs.promises.chmod(path.join(macosDir, productName), 0o755);
+  const plistPath = path.join(contents, 'Info.plist');
+  await fs.promises.writeFile(plistPath, plist, 'utf8');
 
-  if (commandExists('codesign', ['--version'])) await run('codesign', ['--force', '--deep', '--sign', '-', appBundle]);
+  if (commandExists('/usr/bin/plutil', ['-help'])) {
+    await run('/usr/bin/plutil', ['-lint', plistPath]);
+  }
+
+  if (commandExists('/usr/bin/codesign', ['--version'])) {
+    await run('/usr/bin/codesign', ['--force', '--sign', '-', nativeHost]);
+    await run('/usr/bin/codesign', ['--force', '--sign', '-', mainExecutable]);
+    await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appBundle]);
+    await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appBundle]);
+  }
 
   const zipPath = path.join(buildRoot, `${productName}-macos.zip`);
   if (commandExists('ditto', ['-h'])) {
@@ -347,7 +539,8 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
     await run('hdiutil', ['create', '-volname', productName, '-srcfolder', appBundle, '-ov', '-format', 'UDZO', dmgPath]);
     outputs.push(dmgPath);
   }
-  return outputs;
+
+  return { outputs, appBundle };
 }
 
 async function packageLinux({ project, buildRoot, unpacked, executableName, productName }) {
@@ -502,4 +695,4 @@ function xml(value) {
   return String(value).replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]);
 }
 
-module.exports = { buildCommand, localBuild };
+module.exports = { buildCommand, localBuild, createApplicationPayload };

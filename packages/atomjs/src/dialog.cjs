@@ -2,10 +2,18 @@
 
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const app = require('./app.cjs');
+const { getNativeHost } = require('./native-host.cjs');
+
 const execFileAsync = promisify(execFile);
 
-async function showOpenDialog(_browserWindowOrOptions, maybeOptions) {
-  const options = normalizeOptions(_browserWindowOrOptions, maybeOptions);
+async function showOpenDialog(browserWindowOrOptions, maybeOptions) {
+  const options = normalizeOptions(browserWindowOrOptions, maybeOptions);
+
+  if (process.platform === 'darwin') {
+    return macOSRequest('dialog-open', options);
+  }
+
   try {
     const filePaths = await openDialogForPlatform(options);
     return { canceled: filePaths.length === 0, filePaths };
@@ -15,8 +23,17 @@ async function showOpenDialog(_browserWindowOrOptions, maybeOptions) {
   }
 }
 
-async function showSaveDialog(_browserWindowOrOptions, maybeOptions) {
-  const options = normalizeOptions(_browserWindowOrOptions, maybeOptions);
+async function showSaveDialog(browserWindowOrOptions, maybeOptions) {
+  const options = normalizeOptions(browserWindowOrOptions, maybeOptions);
+
+  if (process.platform === 'darwin') {
+    const result = await macOSRequest('dialog-save', options);
+    return {
+      canceled: Boolean(result.canceled),
+      filePath: result.filePath || undefined
+    };
+  }
+
   try {
     const filePath = await saveDialogForPlatform(options);
     return { canceled: !filePath, filePath: filePath || undefined };
@@ -26,10 +43,14 @@ async function showSaveDialog(_browserWindowOrOptions, maybeOptions) {
   }
 }
 
-async function showMessageBox(_browserWindowOrOptions, maybeOptions) {
-  const options = normalizeOptions(_browserWindowOrOptions, maybeOptions);
+async function showMessageBox(browserWindowOrOptions, maybeOptions) {
+  const options = normalizeOptions(browserWindowOrOptions, maybeOptions);
   const title = options.title || 'AtomJS';
   const message = options.message || '';
+
+  if (process.platform === 'darwin') {
+    return macOSRequest('dialog-message', { ...options, title, message });
+  }
 
   if (process.platform === 'win32') {
     const script = [
@@ -37,13 +58,16 @@ async function showMessageBox(_browserWindowOrOptions, maybeOptions) {
       `[System.Windows.MessageBox]::Show(${psQuote(message)}, ${psQuote(title)}) | Out-Null`
     ].join('; ');
     await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script]);
-  } else if (process.platform === 'darwin') {
-    await execFileAsync('osascript', ['-e', `display dialog ${appleQuote(message)} with title ${appleQuote(title)} buttons {"OK"} default button "OK"`]);
   } else {
     await execFileAsync('zenity', ['--info', `--title=${title}`, `--text=${message}`]);
   }
 
   return { response: 0, checkboxChecked: false };
+}
+
+async function macOSRequest(command, options) {
+  const host = getNativeHost(app.getName());
+  return host.request({ command, options });
 }
 
 async function openDialogForPlatform(options) {
@@ -60,15 +84,6 @@ async function openDialogForPlatform(options) {
       'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileNames | ForEach-Object { Write-Output $_ } }'
     ].filter(Boolean).join('; ');
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8' });
-    return splitLines(stdout);
-  }
-
-  if (process.platform === 'darwin') {
-    const prompt = options.title || 'Choose a file';
-    const script = multiple
-      ? `set chosenFiles to choose file with prompt ${appleQuote(prompt)} with multiple selections allowed\nset output to ""\nrepeat with f in chosenFiles\nset output to output & POSIX path of f & linefeed\nend repeat\nreturn output`
-      : `POSIX path of (choose file with prompt ${appleQuote(prompt)})`;
-    const { stdout } = await execFileAsync('osascript', ['-e', script], { encoding: 'utf8' });
     return splitLines(stdout);
   }
 
@@ -91,13 +106,6 @@ async function saveDialogForPlatform(options) {
       'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }'
     ].filter(Boolean).join('; ');
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8' });
-    return stdout.trim();
-  }
-
-  if (process.platform === 'darwin') {
-    const defaultName = options.defaultPath ? String(options.defaultPath).split(/[\\/]/).pop() : 'Untitled';
-    const script = `POSIX path of (choose file name with prompt ${appleQuote(options.title || 'Save file')} default name ${appleQuote(defaultName)})`;
-    const { stdout } = await execFileAsync('osascript', ['-e', script], { encoding: 'utf8' });
     return stdout.trim();
   }
 
@@ -132,10 +140,6 @@ function isCancellation(error) {
 
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function appleQuote(value) {
-  return JSON.stringify(String(value));
 }
 
 module.exports = { showOpenDialog, showSaveDialog, showMessageBox };

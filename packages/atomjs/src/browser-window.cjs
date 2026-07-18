@@ -9,6 +9,7 @@ const state = require('./state.cjs');
 const app = require('./app.cjs');
 const { WebContents } = require('./web-contents.cjs');
 const { generateBridgeScript } = require('./bridge-script.cjs');
+const { getNativeHost } = require('./native-host.cjs');
 
 class BrowserWindow extends EventEmitter {
   constructor(options = {}) {
@@ -17,6 +18,8 @@ class BrowserWindow extends EventEmitter {
     this.options = normalizeOptions(options);
     this.webContents = new WebContents(this);
     this._child = null;
+    this._nativeHost = null;
+    this._hostAttached = false;
     this._destroyed = false;
     this._rendererReady = false;
     this._visible = this.options.show;
@@ -26,14 +29,20 @@ class BrowserWindow extends EventEmitter {
     this._menu = null;
     this._menuBarVisible = true;
     this._lastFinishedLoad = null;
+    this._fullScreen = false;
+    this._maximized = false;
+    this._minimized = false;
+    this._bounds = {
+      x: 0,
+      y: 0,
+      width: this.options.width,
+      height: this.options.height
+    };
     state.windows.set(this.id, this);
   }
 
   loadFile(filePath) {
     const task = this._loadFile(filePath);
-    // Electron applications commonly call loadFile() without awaiting it. Keep
-    // failures observable to callers while preventing a second, unhandled
-    // rejection from terminating modern Node.js processes.
     task.catch(() => {});
     return task;
   }
@@ -61,32 +70,49 @@ class BrowserWindow extends EventEmitter {
 
   async _load(url) {
     if (this._destroyed) throw new Error('BrowserWindow has been destroyed');
-    this._currentUrl = url;
+    this._currentUrl = String(url);
 
-    if (this._child) {
-      state.bridgeServer.send(this.id, { type: 'system', command: 'navigate', url });
+    if (this._hostAttached) {
+      this._sendHostCommand({ command: 'navigate', url: this._currentUrl });
       return;
     }
 
     const preloadPath = this.options.webPreferences.preload;
     let preloadCode = '';
-    if (preloadPath) {
-      preloadCode = await fs.promises.readFile(path.resolve(preloadPath), 'utf8');
-    }
+    if (preloadPath) preloadCode = await fs.promises.readFile(path.resolve(preloadPath), 'utf8');
 
     const config = {
       title: this.options.title || app.getName(),
       width: this.options.width,
       height: this.options.height,
       resizable: this.options.resizable,
+      center: this.options.center,
+      frame: this.options.frame,
+      show: this.options.show,
+      backgroundColor: this.options.backgroundColor,
       debug: Boolean(this.options.webPreferences.devTools || process.env.ATOM_DEV === '1'),
-      url,
+      url: this._currentUrl,
       bridgeScript: generateBridgeScript({
         websocketUrl: state.bridgeServer.websocketUrl(this.id),
         preloadCode
       })
     };
 
+    this._pendingLoad = this._createPendingLoad();
+
+    if (process.platform === 'darwin') {
+      this._nativeHost = getNativeHost(app.getName());
+      this._hostAttached = true;
+      await this._nativeHost.createWindow(this, config);
+    } else {
+      await this._startLegacyHost(config);
+    }
+
+    this._pendingLoad.catch(() => {});
+    return this._pendingLoad;
+  }
+
+  async _startLegacyHost(config) {
     const configPath = path.join(os.tmpdir(), `atomjs-window-${process.pid}-${this.id}-${Date.now()}.json`);
     await fs.promises.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
 
@@ -97,7 +123,7 @@ class BrowserWindow extends EventEmitter {
       env: process.env,
       stdio: ['ignore', 'pipe', 'inherit']
     });
-
+    this._hostAttached = true;
     attachHostOutput(this, this._child);
 
     this._child.once('error', (error) => {
@@ -111,16 +137,22 @@ class BrowserWindow extends EventEmitter {
         const failedBeforeReady = !this._rendererReady && code !== 0 && signal == null;
         if (failedBeforeReady) {
           process.exitCode = code || 1;
-          this.webContents.emit('did-fail-load', {}, code || 1, 'AtomJS window host exited before the renderer became ready', this._currentUrl, true);
+          this.webContents.emit(
+            'did-fail-load',
+            {},
+            code || 1,
+            'AtomJS window host exited before the renderer became ready',
+            this._currentUrl,
+            true
+          );
         }
-        this._destroyed = true;
-        state.windows.delete(this.id);
-        this.emit('closed', { code, signal });
-        if (state.windows.size === 0 && !state.isQuitting) app.emit('window-all-closed');
+        this._finalizeClosed({ code, signal });
       }
     });
+  }
 
-    this._pendingLoad = new Promise((resolve, reject) => {
+  _createPendingLoad() {
+    return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error('Renderer did not become ready within 20 seconds'));
@@ -141,11 +173,14 @@ class BrowserWindow extends EventEmitter {
       this.once('ready-to-show', onReady);
       this.once('closed', onClosed);
     });
+  }
 
-    // Keep Electron-style fire-and-forget loadFile() usage from producing an
-    // unhandled rejection while still returning the rejecting promise to callers.
-    this._pendingLoad.catch(() => {});
-    return this._pendingLoad;
+  _sendHostCommand(command) {
+    if (this._nativeHost) {
+      this._nativeHost.send({ ...command, windowId: this.id });
+      return true;
+    }
+    return false;
   }
 
   _markRendererReady(details) {
@@ -154,6 +189,29 @@ class BrowserWindow extends EventEmitter {
 
   _handleHostEvent(event) {
     if (!event || typeof event !== 'object') return;
+
+    if (event.type === 'closed') {
+      this._finalizeClosed({ code: 0, signal: null });
+      return;
+    }
+    if (event.type === 'focus') {
+      this.emit('focus');
+      return;
+    }
+    if (event.type === 'blur') {
+      this.emit('blur');
+      return;
+    }
+    if (event.type === 'minimize') {
+      this._minimized = true;
+      this.emit('minimize');
+      return;
+    }
+    if (event.type === 'restore') {
+      this._minimized = false;
+      this.emit('restore');
+      return;
+    }
     if (event.type === 'did-start-loading') {
       if (event.url) this._currentUrl = String(event.url);
       this.webContents.emit('did-start-loading');
@@ -179,10 +237,12 @@ class BrowserWindow extends EventEmitter {
     if (href) this._currentUrl = href;
 
     const now = Date.now();
-    if (this._lastFinishedLoad &&
-        this._lastFinishedLoad.url === this._currentUrl &&
-        this._lastFinishedLoad.source !== source &&
-        now - this._lastFinishedLoad.time < 300) {
+    if (
+      this._lastFinishedLoad &&
+      this._lastFinishedLoad.url === this._currentUrl &&
+      this._lastFinishedLoad.source !== source &&
+      now - this._lastFinishedLoad.time < 300
+    ) {
       return;
     }
     this._lastFinishedLoad = { url: this._currentUrl, time: now, source };
@@ -199,14 +259,26 @@ class BrowserWindow extends EventEmitter {
     }
   }
 
+  _finalizeClosed(details) {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    this._hostAttached = false;
+    state.windows.delete(this.id);
+    this.emit('closed', details);
+    if (state.windows.size === 0 && !state.isQuitting) app.emit('window-all-closed');
+  }
+
   show() {
     this._visible = true;
+    this._sendHostCommand({ command: 'show' });
     this.emit('show');
   }
 
   hide() {
     this._visible = false;
-    console.warn('[AtomJS] Native hide/show is not yet supported by the current pure-JS window host.');
+    if (!this._sendHostCommand({ command: 'hide' })) {
+      console.warn('[AtomJS] Native hide is not supported by the current platform host.');
+    }
     this.emit('hide');
   }
 
@@ -215,7 +287,9 @@ class BrowserWindow extends EventEmitter {
   }
 
   focus() {
-    console.warn('[AtomJS] Native focus is not yet supported by the current window host.');
+    if (!this._sendHostCommand({ command: 'focus' })) {
+      console.warn('[AtomJS] Native focus is not supported by the current platform host.');
+    }
   }
 
   blur() {}
@@ -225,6 +299,8 @@ class BrowserWindow extends EventEmitter {
     const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     this.emit('close', event);
     if (event.defaultPrevented) return;
+
+    if (this._sendHostCommand({ command: 'close' })) return;
     state.bridgeServer && state.bridgeServer.send(this.id, { type: 'system', command: 'close' });
     setTimeout(() => {
       if (!this._destroyed && this._child) this._child.kill();
@@ -233,13 +309,14 @@ class BrowserWindow extends EventEmitter {
 
   destroy() {
     if (this._destroyed) return;
-    this._destroyed = true;
-    state.windows.delete(this.id);
+    if (this._nativeHost) {
+      try { this._sendHostCommand({ command: 'destroy' }); } catch {}
+    }
     if (this._child) {
       try { this._child.kill(); } catch {}
       this._child = null;
     }
-    this.emit('closed');
+    this._finalizeClosed({ code: 0, signal: null });
   }
 
   isDestroyed() {
@@ -248,7 +325,7 @@ class BrowserWindow extends EventEmitter {
 
   setTitle(title) {
     this.options.title = String(title);
-    if (state.bridgeServer) {
+    if (!this._sendHostCommand({ command: 'set-title', title: this.options.title }) && state.bridgeServer) {
       state.bridgeServer.send(this.id, { type: 'system', command: 'set-title', title: this.options.title });
     }
   }
@@ -256,7 +333,6 @@ class BrowserWindow extends EventEmitter {
   getTitle() {
     return this.options.title || app.getName();
   }
-
 
   setMenu(menu) {
     this._menu = menu || null;
@@ -286,51 +362,69 @@ class BrowserWindow extends EventEmitter {
   setAutoHideMenuBar() {}
 
   isFullScreen() {
-    return false;
+    return this._fullScreen;
   }
 
-  setFullScreen() {
-    console.warn('[AtomJS] Native fullscreen switching is not implemented yet.');
+  setFullScreen(value = true) {
+    this._fullScreen = Boolean(value);
+    if (!this._sendHostCommand({ command: 'fullscreen', value: this._fullScreen })) {
+      console.warn('[AtomJS] Native fullscreen switching is not supported by the current platform host.');
+    }
   }
 
   maximize() {
-    console.warn('[AtomJS] Native maximize is not implemented yet.');
+    this._maximized = true;
+    if (!this._sendHostCommand({ command: 'maximize' })) {
+      console.warn('[AtomJS] Native maximize is not supported by the current platform host.');
+    }
   }
 
-  unmaximize() {}
+  unmaximize() {
+    this._maximized = false;
+    this._sendHostCommand({ command: 'unmaximize' });
+  }
 
   isMaximized() {
-    return false;
+    return this._maximized;
   }
 
   minimize() {
-    console.warn('[AtomJS] Native minimize is not implemented yet.');
+    this._minimized = true;
+    if (!this._sendHostCommand({ command: 'minimize' })) {
+      console.warn('[AtomJS] Native minimize is not supported by the current platform host.');
+    }
   }
 
-  restore() {}
+  restore() {
+    this._minimized = false;
+    this._sendHostCommand({ command: 'restore' });
+  }
 
   isMinimized() {
-    return false;
+    return this._minimized;
   }
 
   setSize(width, height) {
-    this.options.width = Number(width);
-    this.options.height = Number(height);
-    console.warn('[AtomJS] Changing the native window size after creation is not yet supported.');
+    this.setBounds({ width, height });
   }
 
   getSize() {
-    return [this.options.width, this.options.height];
+    return [this._bounds.width, this._bounds.height];
   }
 
   setBounds(bounds) {
-    if (bounds.width) this.options.width = Number(bounds.width);
-    if (bounds.height) this.options.height = Number(bounds.height);
-    console.warn('[AtomJS] Changing native bounds after creation is not yet supported.');
+    const next = { ...this._bounds };
+    for (const key of ['x', 'y', 'width', 'height']) {
+      if (Number.isFinite(Number(bounds?.[key]))) next[key] = Number(bounds[key]);
+    }
+    this._bounds = next;
+    if (!this._sendHostCommand({ command: 'set-bounds', bounds: next })) {
+      console.warn('[AtomJS] Changing native bounds is not supported by the current platform host.');
+    }
   }
 
   getBounds() {
-    return { x: 0, y: 0, width: this.options.width, height: this.options.height };
+    return { ...this._bounds };
   }
 
   reload() {
@@ -372,7 +466,7 @@ function attachHostOutput(win, child) {
 function handleHostLine(win, line) {
   const prefix = '__ATOMJS_EVENT__';
   if (!line.startsWith(prefix)) {
-    if (line) process.stdout.write(line + '\n');
+    if (line) process.stdout.write(`${line}\n`);
     return;
   }
   try {

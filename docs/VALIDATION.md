@@ -1,16 +1,17 @@
 # Validation record
 
-Validated on 2026-07-18 with Node.js 22.16.0:
+Validated for 0.3.0-alpha.0 with Node.js 22 and 24:
 
-- all JavaScript, CommonJS, ES module, and JXA source passed syntax checks
-- twelve Node.js tests passed
-- CommonJS `require('electron')` and ESM `import('electron')` returned AtomJS `BrowserWindow`
-- a clean temporary project launched through `atom run dev` and resolved the generated Electron facade
-- the exact MSMC 5.0.5 Electron GUI module was exercised with a test window and completed its OAuth callback path
-- repeated `webContents.did-finish-load` navigation behavior was exercised
-- static file serving and WebSocket `ipcMain.handle()` invocation were exercised
-- `atom init` project generation was exercised
-- the Linux unpacked build and tar.gz packaging path completed with the Electron facade inside the staged application
-- `npm audit --omit=dev` reported zero vulnerabilities
+- thirteen Node.js tests pass
+- CommonJS `require('electron')` and ESM `import('electron')` return AtomJS `BrowserWindow`
+- the macOS runtime contains a Cocoa/WKWebView host and no JXA window host
+- `BrowserWindow` uses one shared macOS host for all windows
+- native macOS window commands cover create, close, navigation, title, visibility, focus, bounds, minimize, maximize, restore and fullscreen
+- macOS open/save/message dialogs are handled by Cocoa rather than `osascript`
+- the macOS builder embeds the application payload as a SEA asset
+- the macOS bundle contains no visible `Resources/app` source directory or separate `Resources/runtime/node`
+- the build compiles the host with `xcrun clang`, ad-hoc signs nested executables, and performs strict deep signature verification
+- static file serving and WebSocket `ipcMain.handle()` invocation are exercised
+- `atom init` project generation and Electron-facade provisioning are exercised
 
-The container did not provide GTK/WebKitGTK or a graphical display, so an actual native Linux window could not be launched. Windows NSIS, macOS app/DMG, the macOS JXA/WKWebView window itself, and GitHub Actions remote builds require their respective operating systems and are represented by implementation plus workflow definitions rather than local execution in this Linux environment.
+GitHub Actions performs the actual macOS compile-and-package smoke build because Cocoa and WebKit frameworks are unavailable in the Linux development container. Windows and Linux keep the alpha adapter architecture and require dedicated native-host work before receiving the same packaging model.

@@ -67,13 +67,13 @@ A local build is created when the requested target matches the host OS. Cross-OS
 AtomJS mirrors Electron's familiar split:
 
 - **Main process:** regular Node.js; owns application lifecycle, filesystem access, dependencies, and privileged APIs.
-- **BrowserWindow:** launches a native system WebView in an isolated window-host process.
+- **BrowserWindow:** sends window commands to one shared native host per application, so multiple windows remain part of the same desktop app.
 - **Renderer:** ordinary HTML, CSS, and browser JavaScript.
 - **Preload bridge:** supports `require('electron')`, `contextBridge`, and `ipcRenderer`.
 - **IPC:** authenticated localhost WebSocket transport between the renderer and Node.js main process.
 - **Compatibility facade:** exposes Electron-style module names to application code and transitive npm dependencies.
 
-AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux. WebView2 uses the Microsoft Edge rendering engine, so Windows still uses a Chromium-derived system engine, but AtomJS does not ship its own Chromium copy. Windows and Linux currently use the small `webview-nodejs` adapter; macOS uses the built-in JavaScript for Automation runtime and does not require a compiled addon for development runs.
+AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux. WebView2 uses the Microsoft Edge rendering engine, so Windows still uses a Chromium-derived system engine, but AtomJS does not ship its own Chromium copy. Windows and Linux currently use the small `webview-nodejs` adapter. macOS uses one native Cocoa/WKWebView host compiled with the system SDK; it does not use `osascript` and does not create a separate application identity for every window.
 
 ## Electron compatibility
 
@@ -83,7 +83,7 @@ Chromium-specific behavior and native platform features cannot become identical 
 
 ## Important technical truth
 
-AtomJS contains no Rust. On macOS, the window host is JavaScript executed by `osascript` and talks to AppKit and WKWebView. Windows and Linux still require a thin native adapter because plain Node.js does not expose WebView2 or WebKitGTK APIs. AtomJS does not bundle Chromium.
+AtomJS contains no Rust and does not bundle Chromium. Plain Node.js cannot directly create an AppKit/WKWebView window, so macOS uses a small Objective-C host compiled with Apple's Command Line Tools. The application logic and public API remain Node.js, while one native host owns all macOS windows. Windows and Linux still require a thin native adapter for WebView2 or WebKitGTK.
 
 This is an **alpha foundation**, not yet a production-complete reimplementation of every Electron API. The 0.2 compatibility layer fixes Electron-oriented dependencies such as MSMC resolving the module and adds repeated `did-finish-load` navigation events needed by OAuth flows.
 
@@ -102,7 +102,7 @@ npm install electron@npm:@atom-js-org/electron@alpha
 npm install --save-dev @atom-js-org/cli@alpha
 ```
 
-On macOS, AtomJS uses the built-in WKWebView host and does not require `webview-nodejs` for development runs. Linux and Windows currently use a thin native system-WebView adapter. Run `npx atom doctor` for platform checks.
+On macOS, AtomJS uses a shared native WKWebView host and does not require `webview-nodejs` or `osascript`. The first development run may compile the host with the Xcode Command Line Tools. Linux and Windows currently use a thin native system-WebView adapter. Run `npx atom doctor` for platform checks.
 
 ## License
 

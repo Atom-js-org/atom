@@ -15,9 +15,10 @@ async function doctorCommand(options = {}) {
     rows.push(check('WebView2 Runtime', checkWindowsWebView2(), 'required by the native WebView'));
     rows.push(check('NSIS (optional installer)', commandExists('makensis', ['/VERSION'])));
   } else if (process.platform === 'darwin') {
-    rows.push(check('osascript JavaScript host', fs.existsSync('/usr/bin/osascript')));
+    rows.push(check('Xcode Command Line Tools', commandExists('/usr/bin/xcrun', ['--version']), 'required to compile the native Cocoa host'));
+    rows.push(check('Clang', commandExists('/usr/bin/xcrun', ['clang', '--version'])));
     rows.push(check('WebKit framework', fs.existsSync('/System/Library/Frameworks/WebKit.framework')));
-    rows.push(check('codesign', commandExists('codesign', ['--version'])));
+    rows.push(check('codesign', commandExists('/usr/bin/codesign', ['--version'])));
     rows.push(check('hdiutil', commandExists('hdiutil', ['help'])));
   } else {
     rows.push(check('pkg-config', commandExists('pkg-config', ['--version'])));
@@ -28,7 +29,7 @@ async function doctorCommand(options = {}) {
   }
 
   if (process.platform === 'darwin') {
-    rows.push(check('macOS WKWebView backend', true, 'built in through JavaScript for Automation'));
+    rows.push(check('macOS WKWebView backend', true, 'shared native Cocoa host; no osascript process'));
   } else {
     try {
       const project = loadProject(options.project);

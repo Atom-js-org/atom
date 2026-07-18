@@ -6,6 +6,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const state = require('./state.cjs');
 const { BridgeServer } = require('./bridge-server.cjs');
+const { stopNativeHost } = require('./native-host.cjs');
 
 class App extends EventEmitter {
   constructor() {
@@ -41,6 +42,7 @@ class App extends EventEmitter {
     }
 
     for (const win of [...state.windows.values()]) win.destroy();
+    await stopNativeHost();
     if (state.bridgeServer) await state.bridgeServer.stop();
     this.emit('will-quit');
     this.emit('quit', {}, 0);

@@ -13,17 +13,19 @@ Application main.js (Node.js)
         │                 │
         │                 └── renderer IPC and static application files
         │
-        └── one window-host process per BrowserWindow
-                          │
-                          └── system WebView
-                              Windows: WebView2
-                              macOS: WebKit / WKWebView
-                              Linux: WebKitGTK
+        └── native window host
+              ├── macOS: one Cocoa process owns every WKWebView window
+              ├── Windows: WebView2 adapter
+              └── Linux: WebKitGTK adapter
 ```
 
-## Why a window-host process
+## One application, multiple windows
 
-Native GUI event loops must not block the application's Node.js main process. AtomJS therefore gives every BrowserWindow a small host process while preserving responsive Node.js timers, filesystem callbacks and IPC. On macOS that host is JavaScript for Automation controlling AppKit and WKWebView; Windows and Linux currently use the `webview-nodejs` adapter.
+A desktop application must not become a collection of unrelated helper applications. On macOS, AtomJS starts one shared Cocoa host for the whole Node.js main process. Every `BrowserWindow` is created inside that host and uses the same application menu, Dock identity, activation state, and event loop.
+
+The macOS host is a small Objective-C program compiled with the installed Apple SDK. It does not use `osascript`, JXA, Electron, Chromium, or Rust. Node.js remains the main process and sends JSON commands to the host over pipes.
+
+Windows and Linux still use the current WebView adapter while their shared-host implementations are developed.
 
 ## Main process
 
@@ -45,9 +47,13 @@ Arbitrary Node.js `require()` calls are intentionally unavailable in the rendere
 
 `BrowserWindow.loadFile()` serves the page from an authenticated local HTTP server instead of `file://`. This avoids common module/CORS problems with modern frontend builds while restricting files to the selected content root.
 
+## Packaged application payload
+
+On macOS, production code and production dependencies are compressed into an AtomJS payload and embedded in the Node.js Single Executable Application. The `.app` bundle no longer exposes a `Resources/app` source tree or a second `Resources/runtime/node` executable. On first launch, the signed executable materializes its payload into a versioned application-data cache and starts the project main script from there.
+
 ## IPC security
 
-Every application run creates a random 256-bit bridge token and listens only on `127.0.0.1`. A window ID and token are required for WebSocket upgrades. This is suitable for a prototype, but a production release should additionally validate navigation origins, rotate per-window tokens and define explicit IPC permissions.
+Every application run creates a random 256-bit bridge token and listens only on `127.0.0.1`. A window ID and token are required for WebSocket upgrades. A production release should additionally validate navigation origins, rotate per-window tokens and define explicit IPC permissions.
 
 ## Electron compatibility boundary
 

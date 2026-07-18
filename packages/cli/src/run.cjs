@@ -54,7 +54,9 @@ async function runBuild(options) {
   if (!fs.existsSync(executable)) throw new Error(`Built executable not found: ${executable}`);
 
   console.log(`Running ${path.basename(executable)}`);
-  const child = spawn(executable, [], {
+  const command = target === 'macos' && executable.endsWith('.app') ? 'open' : executable;
+  const args = command === 'open' ? ['-W', executable] : [];
+  const child = spawn(command, args, {
     cwd: path.dirname(executable),
     stdio: 'inherit'
   });

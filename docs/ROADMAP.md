@@ -1,24 +1,23 @@
 # Roadmap
 
-## 0.1 foundation
+## 0.3 native macOS application
 
-- Electron-like main/preload/renderer project structure
-- system WebView window host
-- IPC bridge
-- CLI dev and build commands
-- remote three-OS build workflow
+- one shared Cocoa/WKWebView host per application
+- native window controls and dialogs without `osascript`
+- embedded macOS application payload
+- signed and verified `.app`, ZIP, and DMG output
 
-## 0.2 native adapters
+## 0.4 shared Windows and Linux hosts
 
-- non-blocking native window control
-- menu, tray, shortcuts and notifications
-- consistent title-bar customization
-- per-window capability manifest
+- one WebView2 host per Windows application
+- one WebKitGTK host per Linux application
+- embedded payloads without loose application source directories
+- native menu, tray, shortcuts and notifications
 
-## 0.3 distribution
+## 0.5 distribution
 
 - Windows signing
-- macOS signing and notarization
+- macOS Developer ID signing and notarization
 - Linux deb/rpm packages
 - delta updates
 - release publishing

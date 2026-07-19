@@ -39,8 +39,8 @@ async function localBuild(project, target, options = {}) {
   }
 
   const buildRoot = path.join(project.root, 'build', target);
-  const unpacked = path.join(buildRoot, 'unpacked');
-  const appDir = path.join(unpacked, 'app');
+  const unpacked = path.join(buildRoot, 'portable');
+  const appDir = null;
   const productName = sanitizeFilename(project.config.productName);
 
   console.log(`\nAtomJS build (${target})`);
@@ -50,7 +50,8 @@ async function localBuild(project, target, options = {}) {
   await fse.remove(buildRoot);
   await fse.ensureDir(unpacked);
 
-  const stageRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'atomjs-stage-'));
+  const stageBase = await resolveShortStageBase();
+  const stageRoot = await fs.promises.mkdtemp(path.join(stageBase, 's-'));
   const stagedApp = path.join(stageRoot, 'app');
   const payloadPath = path.join(stageRoot, 'atom-app.payload.gz');
 
@@ -59,21 +60,8 @@ async function localBuild(project, target, options = {}) {
     await vendorFramework(stagedApp, project, target);
     await installProductionDependencies(stagedApp, options.skipInstall, target);
 
-    if (target === 'macos') {
-      console.log('Embedding application code and production dependencies into the native executable...');
-      await createApplicationPayload(stagedApp, payloadPath);
-    } else {
-      await fse.move(stagedApp, appDir, { overwrite: true });
-    }
-
-    if (target !== 'macos') {
-      const runtimeDir = path.join(unpacked, 'runtime');
-      await fse.ensureDir(runtimeDir);
-      const runtimeNodeName = target === 'windows' ? 'node.exe' : 'node';
-      const runtimeNodePath = path.join(runtimeDir, runtimeNodeName);
-      await fs.promises.copyFile(process.execPath, runtimeNodePath);
-      if (target !== 'windows') await fs.promises.chmod(runtimeNodePath, 0o755);
-    }
+    console.log('Embedding application code and production dependencies into the executable...');
+    await createApplicationPayload(stagedApp, payloadPath);
 
     const executableName = target === 'windows' ? `${productName}.exe` : productName;
     const executablePath = path.join(unpacked, executableName);
@@ -82,7 +70,7 @@ async function localBuild(project, target, options = {}) {
       appDir,
       target,
       productName,
-      payloadPath: target === 'macos' ? payloadPath : null
+      payloadPath
     });
 
     const creditPath = path.join(unpacked, 'ATOMJS-CREDIT.txt');
@@ -136,6 +124,28 @@ async function localBuild(project, target, options = {}) {
   } finally {
     await fse.remove(stageRoot);
   }
+}
+
+
+async function resolveShortStageBase() {
+  const configured = process.env.ATOMJS_TEMP_DIR || process.env.ATOM_TEMP_DIR;
+  const candidates = configured
+    ? [path.resolve(configured)]
+    : process.platform === 'win32'
+      ? [path.join(path.parse(process.cwd()).root, '.atomjs-tmp'), path.join(os.tmpdir(), 'atomjs')]
+      : [path.join(os.tmpdir(), 'atomjs')];
+
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      await fse.ensureDir(candidate);
+      await fs.promises.access(candidate, fs.constants.W_OK);
+      return candidate;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`AtomJS could not create a writable short staging directory: ${lastError ? lastError.message : 'unknown error'}`);
 }
 
 async function copyApplication(projectRoot, appDir) {
@@ -284,9 +294,8 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   const blobPath = path.join(work, target === 'windows' ? 'sea-prep.blob.exe' : 'sea-prep.blob');
   const configPath = path.join(work, 'sea-config.json');
 
-  const launcher = payloadPath
-    ? createEmbeddedLauncherSource(productName)
-    : createLooseLauncherSource();
+  if (!payloadPath) throw new Error('AtomJS SEA payload is required.');
+  const launcher = createEmbeddedLauncherSource(productName);
   await fs.promises.writeFile(launcherPath, launcher, 'utf8');
 
   const seaConfig = {
@@ -295,7 +304,7 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
     useCodeCache: false,
-    ...(payloadPath ? { assets: { 'atom-app': payloadPath } } : {})
+    assets: { 'atom-app': payloadPath }
   };
   await fs.promises.writeFile(configPath, JSON.stringify(seaConfig, null, 2));
 
@@ -318,33 +327,6 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   await fse.remove(work);
 }
 
-function createLooseLauncherSource() {
-  return `
-'use strict';
-const path = require('node:path');
-const fs = require('node:fs');
-const { createRequire } = require('node:module');
-
-const executableDir = path.dirname(process.execPath);
-const appDir = path.join(executableDir, 'app');
-const packagePath = path.join(appDir, 'package.json');
-if (!fs.existsSync(packagePath)) {
-  console.error('AtomJS application files are missing:', appDir);
-  process.exit(1);
-}
-
-const runtimeNode = path.join(executableDir, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-process.chdir(appDir);
-process.env.ATOM_PROJECT_ROOT = appDir;
-process.env.ATOM_BUILD = '1';
-process.env.ATOM_NODE_EXECUTABLE = runtimeNode;
-const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-const mainPath = path.resolve(appDir, pkg.main || 'main.js');
-const load = createRequire(packagePath);
-load(mainPath);
-`;
-}
-
 function createEmbeddedLauncherSource(productName) {
   return `
 'use strict';
@@ -354,6 +336,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { createRequire } = require('node:module');
+const { pathToFileURL } = require('node:url');
 const { getAsset } = require('node:sea');
 
 const productName = ${JSON.stringify(productName)};
@@ -397,7 +380,20 @@ const executableDir = path.dirname(process.execPath);
 process.chdir(appDir);
 process.env.ATOM_PROJECT_ROOT = appDir;
 process.env.ATOM_BUILD = '1';
+process.env.ATOM_EMBEDDED_RUNTIME = '1';
+process.env.ATOM_WINDOW_HOST_ENTRY = path.join(appDir, 'vendor', 'atomjs', 'src', 'runtime', 'window-host.mjs');
 process.env.ATOM_MACOS_HOST_EXECUTABLE = path.join(executableDir, 'AtomJSWindowHost');
+const hostModeIndex = process.argv.indexOf('--atomjs-window-host');
+if (hostModeIndex !== -1) {
+  const hostEntry = process.env.ATOM_WINDOW_HOST_ENTRY;
+  const configPath = process.argv[hostModeIndex + 1];
+  process.argv = [process.argv[0], hostEntry, configPath];
+  import(pathToFileURL(hostEntry).href).catch((error) => {
+    console.error(error && error.stack ? error.stack : error);
+    process.exit(1);
+  });
+  return;
+}
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 const mainPath = path.resolve(appDir, pkg.main || 'main.js');
 const load = createRequire(packagePath);
@@ -419,11 +415,14 @@ async function packageWindows({ project, buildRoot, unpacked, executableName, pr
     : '';
   const script = `
 Unicode true
+SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 Name "${escapeNsis(productName)}"
 OutFile "${installerPath.replace(/\\/g, '\\\\')}"
 InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(productName)}"
 RequestExecutionLevel user
+ShowInstDetails show
+ShowUninstDetails show
 ${credit}
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -441,6 +440,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$DESKTOP\\${escapeNsis(productName)}.lnk"
   RMDir /r "$SMPROGRAMS\\${escapeNsis(productName)}"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${escapeNsis(project.config.appId)}"
   RMDir /r "$INSTDIR"
 SectionEnd
 `;
@@ -555,8 +555,6 @@ async function packageLinux({ project, buildRoot, unpacked, executableName, prod
   await fse.ensureDir(usrBin);
   await fse.ensureDir(usrLibApp);
   await fse.copy(path.join(unpacked, executableName), path.join(usrBin, productName));
-  await fse.copy(path.join(unpacked, 'app'), path.join(usrBin, 'app'));
-  await fse.copy(path.join(unpacked, 'runtime'), path.join(usrBin, 'runtime'));
   await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(usrLibApp, 'ATOMJS-CREDIT.txt'));
 
   const appRun = `#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/${productName}" "$@"\n`;

@@ -116,9 +116,12 @@ class BrowserWindow extends EventEmitter {
     const configPath = path.join(os.tmpdir(), `atomjs-window-${process.pid}-${this.id}-${Date.now()}.json`);
     await fs.promises.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
 
-    const hostPath = path.join(__dirname, 'runtime', 'window-host.mjs');
+    const hostPath = process.env.ATOM_WINDOW_HOST_ENTRY || path.join(__dirname, 'runtime', 'window-host.mjs');
     const nodeExecutable = process.env.ATOM_NODE_EXECUTABLE || process.execPath;
-    this._child = spawn(nodeExecutable, [hostPath, configPath], {
+    const hostArgs = process.env.ATOM_EMBEDDED_RUNTIME === '1'
+      ? ['--atomjs-window-host', configPath]
+      : [hostPath, configPath];
+    this._child = spawn(nodeExecutable, hostArgs, {
       cwd: state.projectRoot,
       env: process.env,
       stdio: ['ignore', 'pipe', 'inherit']

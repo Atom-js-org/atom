@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/monorepo",
-  "version": "0.3.0-alpha.0",
+  "version": "0.4.0-alpha.0",
   "private": true,
   "description": "Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.",
   "workspaces": [

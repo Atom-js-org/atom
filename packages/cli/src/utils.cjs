@@ -54,9 +54,17 @@ function loadProject(projectInput) {
   };
 }
 
+function normalizeSpawn(command, args) {
+  if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(command)) {
+    return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command, ...args] };
+  }
+  return { command, args };
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const normalized = normalizeSpawn(command, args);
+    const child = spawn(normalized.command, normalized.args, {
       cwd: options.cwd || process.cwd(),
       env: options.env || process.env,
       stdio: options.stdio || 'inherit',
@@ -71,7 +79,8 @@ function run(command, args, options = {}) {
 }
 
 function capture(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const normalized = normalizeSpawn(command, args);
+  const result = spawnSync(normalized.command, normalized.args, {
     cwd: options.cwd || process.cwd(),
     env: options.env || process.env,
     encoding: 'utf8',
@@ -86,7 +95,8 @@ function capture(command, args, options = {}) {
 }
 
 function commandExists(command, args = ['--version']) {
-  const result = spawnSync(command, args, { stdio: 'ignore', shell: false });
+  const normalized = normalizeSpawn(command, args);
+  const result = spawnSync(normalized.command, normalized.args, { stdio: 'ignore', shell: false });
   return !result.error && result.status === 0;
 }
 

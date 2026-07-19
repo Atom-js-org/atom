@@ -70,6 +70,28 @@ static NSColor *AtomJSColor(NSString *hex) {
   return [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha];
 }
 
+static void AtomJSConfigureTransparentWebView(WKWebView *webView) {
+  if (!webView) return;
+
+  // `drawsBackground` is not exposed as a public Objective-C property by every
+  // macOS SDK. Use guarded KVC so older SDKs still compile, while retaining the
+  // WebKit behavior needed for genuinely transparent pages.
+  @try {
+    [webView setValue:@NO forKey:@"drawsBackground"];
+  } @catch (__unused NSException *exception) {}
+
+  // Newer WebKit versions expose a public under-page color. Set it through the
+  // Objective-C runtime so the host also compiles against SDKs that predate it.
+  if ([webView respondsToSelector:NSSelectorFromString(@"setUnderPageBackgroundColor:")]) {
+    @try {
+      [webView setValue:[NSColor clearColor] forKey:@"underPageBackgroundColor"];
+    } @catch (__unused NSException *exception) {}
+  }
+
+  webView.wantsLayer = YES;
+  webView.layer.backgroundColor = [NSColor clearColor].CGColor;
+}
+
 static NSImage *AtomJSDefaultApplicationIcon(void) {
   NSSize size = NSMakeSize(512.0, 512.0);
   NSImage *image = [[NSImage alloc] initWithSize:size];
@@ -208,7 +230,7 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   _webView = [[WKWebView alloc] initWithFrame:frame configuration:webConfiguration];
   _webView.navigationDelegate = self;
   _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  if (AtomJSBoolean(config[@"transparent"], NO)) _webView.drawsBackground = NO;
+  if (AtomJSBoolean(config[@"transparent"], NO)) AtomJSConfigureTransparentWebView(_webView);
   _window.contentView = _webView;
 
   NSNumber *parentWindowId = AtomJSNumber(config[@"parentWindowId"], nil);

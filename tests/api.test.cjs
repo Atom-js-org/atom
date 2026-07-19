@@ -198,6 +198,9 @@ test('macOS host maps modal, title-bar and visual options to AppKit', () => {
   assert.match(source, /NSFloatingWindowLevel/);
   assert.match(source, /titlebarAppearsTransparent/);
   assert.match(source, /trafficLightPosition/);
+  assert.doesNotMatch(source, /\.drawsBackground\s*=/);
+  assert.match(source, /setValue:@NO forKey:@"drawsBackground"/);
+  assert.match(source, /underPageBackgroundColor/);
   assert.match(source, /set-always-on-top/);
   assert.match(source, /set-opacity/);
   assert.match(source, /set-resizable/);

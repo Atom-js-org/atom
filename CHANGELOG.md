@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1-alpha.0
+
+- Fixes macOS native-host compilation on SDKs where `WKWebView.drawsBackground` is not a public Objective-C property.
+- Configures transparent WKWebView backgrounds through guarded runtime/KVC calls and the public under-page color when available.
+
 ## 0.5.0-alpha.0
 
 - Brings Windows OAuth and secondary WebView windows to the foreground, with native owner/modal relationships when a parent is supplied.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1-alpha.0
+
+- Windows release executables now use the GUI subsystem, so launching a built app no longer opens a Command Prompt window.
+- The build removes the inherited Node Authenticode signature before SEA injection to avoid corrupted-signature warnings.
+- `atom doctor` now detects WebView2 using Microsoft's official runtime product ID and validates the `pv` version value.
+- NSIS detection now checks standard installation locations, and generated installers register a proper uninstaller entry.
+
 ## 0.3.0-alpha.0
 
 ### Native macOS application host

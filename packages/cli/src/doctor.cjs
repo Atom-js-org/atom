@@ -12,8 +12,9 @@ async function doctorCommand(options = {}) {
 
   if (process.platform === 'win32') {
     rows.push(check('PowerShell', commandExists('powershell.exe', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'])));
-    rows.push(check('WebView2 Runtime', checkWindowsWebView2(), 'required by the native WebView'));
-    rows.push(check('NSIS (optional installer)', commandExists('makensis', ['/VERSION'])));
+    const webView2Version = getWindowsWebView2Version();
+    rows.push(check('WebView2 Runtime', Boolean(webView2Version), webView2Version || 'required by the native WebView'));
+    rows.push(check('NSIS (optional installer)', Boolean(resolveNsisExecutable())));
   } else if (process.platform === 'darwin') {
     rows.push(check('Xcode Command Line Tools', commandExists('/usr/bin/xcrun', ['--version']), 'required to compile the native Cocoa host'));
     rows.push(check('Clang', commandExists('/usr/bin/xcrun', ['clang', '--version'])));
@@ -69,18 +70,43 @@ function pkgConfigExists(name) {
   return !result.error && result.status === 0;
 }
 
-function checkWindowsWebView2() {
+function getWindowsWebView2Version() {
   const script = `
 $paths = @(
-  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5}',
-  'HKLM:\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5}',
-  'HKCU:\\Software\\Microsoft\\EdgeUpdate\\Clients\\{F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5}'
+  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+  'HKLM:\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+  'HKCU:\\Software\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 )
-foreach ($p in $paths) { if (Test-Path $p) { exit 0 } }
+foreach ($p in $paths) {
+  try {
+    $version = Get-ItemPropertyValue -Path $p -Name 'pv' -ErrorAction Stop
+    if ($version -and $version -ne '0.0.0.0') {
+      Write-Output $version
+      exit 0
+    }
+  } catch {}
+}
 exit 1
 `;
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { stdio: 'ignore' });
-  return !result.error && result.status === 0;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], {
+    encoding: 'utf8',
+    windowsHide: true
+  });
+  if (result.error || result.status !== 0) return null;
+  return String(result.stdout || '').trim() || null;
+}
+
+function resolveNsisExecutable() {
+  const candidates = [
+    process.env.MAKENSIS_PATH,
+    process.env.NSIS_HOME && path.join(process.env.NSIS_HOME, 'makensis.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'NSIS', 'makensis.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'NSIS', 'makensis.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'NSIS', 'makensis.exe')
+  ].filter(Boolean);
+
+  if (commandExists('makensis', ['/VERSION'])) return 'makensis';
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 module.exports = { doctorCommand };

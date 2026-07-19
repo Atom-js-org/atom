@@ -311,6 +311,9 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   await run(process.execPath, ['--experimental-sea-config', configPath], { cwd: work });
   await fs.promises.copyFile(process.execPath, executablePath);
 
+  if (target === 'windows') {
+    await prepareWindowsExecutableForInjection(executablePath);
+  }
   if (target === 'macos' && commandExists('codesign', ['--version'])) {
     spawnSync('codesign', ['--remove-signature', executablePath], { stdio: 'ignore' });
   }
@@ -320,11 +323,64 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
     machoSegmentName: 'NODE_SEA'
   });
 
-  if (target !== 'windows') await fs.promises.chmod(executablePath, 0o755);
+  if (target === 'windows') {
+    await setWindowsGuiSubsystem(executablePath);
+  } else {
+    await fs.promises.chmod(executablePath, 0o755);
+  }
   if (target === 'macos' && commandExists('codesign', ['--version'])) {
     await run('codesign', ['--force', '--sign', '-', executablePath]);
   }
   await fse.remove(work);
+}
+
+
+async function prepareWindowsExecutableForInjection(executablePath) {
+  const image = await fs.promises.readFile(executablePath);
+  const pe = readPortableExecutableLayout(image);
+  const certificateDirectory = pe.dataDirectoryOffset + (8 * 4);
+  const certificateOffset = image.readUInt32LE(certificateDirectory);
+  const certificateSize = image.readUInt32LE(certificateDirectory + 4);
+
+  image.writeUInt32LE(0, certificateDirectory);
+  image.writeUInt32LE(0, certificateDirectory + 4);
+  image.writeUInt32LE(0, pe.optionalHeaderOffset + 64);
+
+  const certificateEnd = certificateOffset + certificateSize;
+  const output = certificateOffset > 0 && certificateSize > 0 && certificateEnd === image.length
+    ? image.subarray(0, certificateOffset)
+    : image;
+  await fs.promises.writeFile(executablePath, output);
+}
+
+async function setWindowsGuiSubsystem(executablePath) {
+  const image = await fs.promises.readFile(executablePath);
+  const pe = readPortableExecutableLayout(image);
+  image.writeUInt16LE(2, pe.optionalHeaderOffset + 68);
+  image.writeUInt32LE(0, pe.optionalHeaderOffset + 64);
+  await fs.promises.writeFile(executablePath, image);
+}
+
+function readPortableExecutableLayout(image) {
+  if (image.length < 0x100 || image.toString('ascii', 0, 2) !== 'MZ') {
+    throw new Error('AtomJS expected a Windows PE executable but the DOS header is missing.');
+  }
+
+  const peOffset = image.readUInt32LE(0x3c);
+  if (peOffset < 0x40 || peOffset + 0x100 > image.length || image.toString('ascii', peOffset, peOffset + 4) !== 'PE\\0\\0') {
+    throw new Error('AtomJS expected a Windows PE executable but the PE header is invalid.');
+  }
+
+  const optionalHeaderOffset = peOffset + 24;
+  const magic = image.readUInt16LE(optionalHeaderOffset);
+  if (magic !== 0x10b && magic !== 0x20b) {
+    throw new Error(`AtomJS does not support Windows PE optional-header magic 0x${magic.toString(16)}.`);
+  }
+
+  return {
+    optionalHeaderOffset,
+    dataDirectoryOffset: optionalHeaderOffset + (magic === 0x20b ? 112 : 96)
+  };
 }
 
 function createEmbeddedLauncherSource(productName) {
@@ -410,6 +466,14 @@ async function packageWindows({ project, buildRoot, unpacked, executableName, pr
   const nsisPath = path.join(buildRoot, 'installer.nsi');
   const installerPath = path.join(buildRoot, `${productName} Installer.exe`);
   const escapedSource = unpacked.replace(/\\/g, '\\\\');
+  const version = String(project.packageJson.version || '0.0.0');
+  const author = project.packageJson.author;
+  const publisher = typeof author === 'string'
+    ? author
+    : author && typeof author === 'object' && author.name
+      ? author.name
+      : 'AtomJS application';
+  const uninstallKey = `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${escapeNsis(project.config.appId)}`;
   const credit = project.config.installerCredit
     ? `!define MUI_WELCOMEPAGE_TEXT "This installer will install ${escapeNsis(productName)}.$\\r$\\n$\\r$\\nPowered by AtomJS — https://github.com/Atom-js-org/atom"`
     : '';
@@ -427,32 +491,58 @@ ${credit}
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_FINISHPAGE_RUN "$INSTDIR\\${escapeNsis(executableName)}"
 !insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 Section "Install"
+  SetShellVarContext current
   SetOutPath "$INSTDIR"
   File /r "${escapedSource}\\*"
   CreateDirectory "$SMPROGRAMS\\${escapeNsis(productName)}"
   CreateShortcut "$SMPROGRAMS\\${escapeNsis(productName)}\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"
   CreateShortcut "$DESKTOP\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
+  WriteRegStr HKCU "${uninstallKey}" "DisplayName" "${escapeNsis(productName)}"
+  WriteRegStr HKCU "${uninstallKey}" "DisplayVersion" "${escapeNsis(version)}"
+  WriteRegStr HKCU "${uninstallKey}" "Publisher" "${escapeNsis(publisher)}"
+  WriteRegStr HKCU "${uninstallKey}" "DisplayIcon" "$INSTDIR\\${escapeNsis(executableName)}"
+  WriteRegStr HKCU "${uninstallKey}" "UninstallString" "$\\\"$INSTDIR\\Uninstall.exe$\\\""
+  WriteRegDWORD HKCU "${uninstallKey}" "NoModify" 1
+  WriteRegDWORD HKCU "${uninstallKey}" "NoRepair" 1
 SectionEnd
 Section "Uninstall"
+  SetShellVarContext current
   Delete "$DESKTOP\\${escapeNsis(productName)}.lnk"
   RMDir /r "$SMPROGRAMS\\${escapeNsis(productName)}"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${escapeNsis(project.config.appId)}"
+  DeleteRegKey HKCU "${uninstallKey}"
   RMDir /r "$INSTDIR"
 SectionEnd
 `;
   await fs.promises.writeFile(nsisPath, script.trimStart(), 'utf8');
 
-  if (commandExists('makensis', ['/VERSION'])) {
-    await run('makensis', [nsisPath]);
+  const makensis = resolveNsisExecutable();
+  if (makensis) {
+    await run(makensis, [nsisPath]);
     if (fs.existsSync(installerPath)) outputs.push(installerPath);
   } else {
     console.warn('NSIS was not found; installer.nsi was generated but the .exe installer was skipped.');
   }
   return outputs;
+}
+
+function resolveNsisExecutable() {
+  const candidates = [
+    process.env.MAKENSIS_PATH,
+    process.env.NSIS_HOME && path.join(process.env.NSIS_HOME, 'makensis.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'NSIS', 'makensis.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'NSIS', 'makensis.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'NSIS', 'makensis.exe')
+  ].filter(Boolean);
+
+  if (commandExists('makensis', ['/VERSION'])) return 'makensis';
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 async function packageMacOS({ project, buildRoot, unpacked, executableName, productName, hostSource }) {

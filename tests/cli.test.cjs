@@ -74,3 +74,16 @@ test('macOS embedded payload dereferences directory symlinks', async () => {
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
+
+
+test('Windows release packaging uses a GUI PE executable and official WebView2 detection', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  const doctorSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'doctor.cjs'), 'utf8');
+
+  assert.match(buildSource, /writeUInt16LE\(2, pe\.optionalHeaderOffset \+ 68\)/);
+  assert.match(buildSource, /certificateDirectory = pe\.dataDirectoryOffset \+ \(8 \* 4\)/);
+  assert.match(buildSource, /WriteRegStr HKCU/);
+  assert.match(doctorSource, /F3017226-FE2A-4295-8BDF-00C3A9A7E4C5/);
+  assert.match(doctorSource, /Get-ItemPropertyValue[^\n]+-Name 'pv'/);
+  assert.doesNotMatch(doctorSource, /F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5/);
+});

@@ -19,7 +19,7 @@ async function doctorCommand(options = {}) {
     rows.push(check('Xcode Command Line Tools', commandExists('/usr/bin/xcrun', ['--version']), 'required to compile the native Cocoa host'));
     rows.push(check('Clang', commandExists('/usr/bin/xcrun', ['clang', '--version'])));
     rows.push(check('WebKit framework', fs.existsSync('/System/Library/Frameworks/WebKit.framework')));
-    rows.push(check('codesign', commandExists('/usr/bin/codesign', ['--version'])));
+    rows.push(check('codesign', fs.existsSync('/usr/bin/codesign'), '/usr/bin/codesign'));
     rows.push(check('hdiutil', commandExists('hdiutil', ['help'])));
   } else {
     rows.push(check('pkg-config', commandExists('pkg-config', ['--version'])));

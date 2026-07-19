@@ -30,14 +30,14 @@ async function initCommand(directory, options = {}) {
       start: 'atom run build'
     },
     dependencies: {
-      '@atom-js-org/runtime': '0.4.2-alpha.0',
-      electron: 'npm:@atom-js-org/electron@0.4.2-alpha.0'
+      '@atom-js-org/runtime': '0.4.3-alpha.0',
+      electron: 'npm:@atom-js-org/electron@0.4.3-alpha.0'
     },
     optionalDependencies: {
       'webview-nodejs': '0.5.0'
     },
     devDependencies: {
-      '@atom-js-org/cli': '0.4.2-alpha.0'
+      '@atom-js-org/cli': '0.4.3-alpha.0'
     },
     overrides: {
       tar: '7.5.20'

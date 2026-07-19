@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3-alpha.0
+
+- Fixed macOS development windows by waiting for AppKit to finish launching before accepting native-host commands.
+- Added acknowledged native window creation and native-host error reporting.
+- Runs the macOS development host from an application bundle with the project name and icon instead of `AtomJSWindowHost` branding.
+- Added a built-in AtomJS Dock icon when a project icon is not configured.
+- Fixed `codesign` detection so macOS SEA executables and app bundles are actually re-signed after injection.
+- Passes application identity and icon metadata to the native macOS host in development and packaged builds.
+
 ## 0.4.2-alpha.0
 
 - Fixed Windows PE signature validation after SEA preparation.

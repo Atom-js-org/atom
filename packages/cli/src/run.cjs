@@ -23,11 +23,17 @@ async function runDev(options) {
 
   await ensureElectronCompatibility(project.root);
 
+  const iconPath = project.config.icon
+    ? path.resolve(project.root, project.config.icon)
+    : null;
   const child = spawn(process.execPath, [mainPath], {
     cwd: project.root,
     env: {
       ...process.env,
       ATOM_PROJECT_ROOT: project.root,
+      ATOM_APP_NAME: project.config.productName,
+      ATOM_APP_ID: project.config.appId,
+      ...(iconPath && fs.existsSync(iconPath) ? { ATOM_APP_ICON: iconPath } : {}),
       ATOM_DEV: '1'
     },
     stdio: 'inherit'

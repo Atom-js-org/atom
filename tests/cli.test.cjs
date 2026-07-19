@@ -105,3 +105,40 @@ test('Windows PE parser accepts a real PE signature without escaped-text confusi
   image.writeUInt32LE(0x00584550, 0x80);
   assert.throws(() => readPortableExecutableLayout(image), /PE header is invalid/);
 });
+
+test('macOS native host waits for AppKit readiness and carries application identity', () => {
+  const nativeManager = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'native-host.cjs'),
+    'utf8'
+  );
+  const nativeSource = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'runtime', 'macos-native-host.m'),
+    'utf8'
+  );
+  const runSource = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'cli', 'src', 'run.cjs'),
+    'utf8'
+  );
+
+  assert.match(nativeManager, /await this\.request\(\{\s*command: 'create'/s);
+  assert.match(nativeManager, /`\$\{executableName\}\.app`/);
+  assert.match(nativeManager, /--app-icon/);
+  assert.match(nativeSource, /applicationDidFinishLaunching/);
+  assert.match(nativeSource, /read\(STDIN_FILENO/);
+  assert.match(nativeSource, /setProcessName:atomAppName/);
+  assert.match(nativeSource, /application\.applicationIconImage/);
+  assert.match(nativeSource, /AtomJSRespond\(requestId, YES, @\{ @"windowId": windowId \}, nil\)/);
+  assert.match(runSource, /ATOM_APP_NAME: project\.config\.productName/);
+  assert.match(runSource, /ATOM_APP_ID: project\.config\.appId/);
+});
+
+test('macOS build uses the system codesign executable instead of an unsupported version probe', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  const doctorSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'doctor.cjs'), 'utf8');
+
+  assert.match(buildSource, /function hasMacCodeSigningTool\(\)/);
+  assert.match(buildSource, /fs\.existsSync\('\/usr\/bin\/codesign'\)/);
+  assert.doesNotMatch(buildSource, /codesign[^\n]+--version/);
+  assert.match(doctorSource, /fs\.existsSync\('\/usr\/bin\/codesign'\)/);
+  assert.doesNotMatch(doctorSource, /codesign[^\n]+--version/);
+});

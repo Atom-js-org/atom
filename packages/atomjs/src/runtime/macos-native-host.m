@@ -1,12 +1,16 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include <string.h>
+#include <unistd.h>
+#include <errno.h>
 
 static NSString *const AtomJSEventPrefix = @"__ATOMJS_EVENT__";
 
 @class AtomJSWindowController;
 static NSMutableDictionary<NSNumber *, AtomJSWindowController *> *atomWindows;
 static NSString *atomAppName = @"AtomJS App";
+static NSString *atomAppIdentifier = @"com.atomjs.app";
+static NSString *atomAppIconPath = nil;
 
 static void AtomJSEmit(NSDictionary *payload) {
   if (![NSJSONSerialization isValidJSONObject:payload]) return;
@@ -64,6 +68,46 @@ static NSColor *AtomJSColor(NSString *hex) {
   }
 
   return [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha];
+}
+
+static NSImage *AtomJSDefaultApplicationIcon(void) {
+  NSSize size = NSMakeSize(512.0, 512.0);
+  NSImage *image = [[NSImage alloc] initWithSize:size];
+  [image lockFocus];
+
+  NSRect canvas = NSMakeRect(0.0, 0.0, size.width, size.height);
+  NSBezierPath *background = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(canvas, 18.0, 18.0) xRadius:112.0 yRadius:112.0];
+  [[NSColor colorWithSRGBRed:0.055 green:0.075 blue:0.11 alpha:1.0] setFill];
+  [background fill];
+
+  NSDictionary *letterAttributes = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:252.0 weight:NSFontWeightSemibold],
+    NSForegroundColorAttributeName: [NSColor colorWithSRGBRed:0.42 green:0.78 blue:1.0 alpha:1.0]
+  };
+  NSString *letter = @"A";
+  NSSize letterSize = [letter sizeWithAttributes:letterAttributes];
+  [letter drawAtPoint:NSMakePoint((size.width - letterSize.width) / 2.0, 154.0) withAttributes:letterAttributes];
+
+  NSDictionary *suffixAttributes = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:82.0 weight:NSFontWeightMedium],
+    NSForegroundColorAttributeName: [NSColor whiteColor]
+  };
+  NSString *suffix = @"JS";
+  NSSize suffixSize = [suffix sizeWithAttributes:suffixAttributes];
+  [suffix drawAtPoint:NSMakePoint((size.width - suffixSize.width) / 2.0, 82.0) withAttributes:suffixAttributes];
+
+  [image unlockFocus];
+  return image;
+}
+
+static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
+  [[NSProcessInfo processInfo] setProcessName:atomAppName];
+
+  NSImage *icon = nil;
+  if (atomAppIconPath.length > 0) {
+    icon = [[NSImage alloc] initWithContentsOfFile:atomAppIconPath];
+  }
+  application.applicationIconImage = icon ?: AtomJSDefaultApplicationIcon();
 }
 
 @interface AtomJSWindowController : NSObject <NSWindowDelegate, WKNavigationDelegate>
@@ -124,7 +168,9 @@ static NSColor *AtomJSColor(NSString *hex) {
   [self navigate:AtomJSString(config[@"url"], @"about:blank")];
 
   if (AtomJSBoolean(config[@"show"], YES)) {
+    [NSApp unhide:nil];
     [_window makeKeyAndOrderFront:nil];
+    [_window orderFrontRegardless];
     [NSApp activateIgnoringOtherApps:YES];
   }
 
@@ -355,10 +401,23 @@ static void AtomJSHandleMessage(NSDictionary *message) {
   if ([command isEqualToString:@"create"]) {
     NSNumber *windowId = AtomJSNumber(message[@"windowId"], nil);
     NSDictionary *config = [message[@"config"] isKindOfClass:[NSDictionary class]] ? message[@"config"] : @{};
-    if (!windowId) return;
+    if (!windowId) {
+      AtomJSRespond(requestId, NO, nil, @"The create command did not include a valid window ID.");
+      return;
+    }
 
     AtomJSWindowController *controller = [[AtomJSWindowController alloc] initWithWindowId:windowId config:config];
+    if (!controller || !controller.window || !controller.webView) {
+      AtomJSRespond(requestId, NO, nil, @"AppKit could not create the AtomJS window.");
+      return;
+    }
+
     atomWindows[windowId] = controller;
+    AtomJSRespond(requestId, YES, @{ @"windowId": windowId }, nil);
+    AtomJSEmit(@{
+      @"type": @"created",
+      @"windowId": windowId
+    });
     return;
   }
 
@@ -391,12 +450,16 @@ static void AtomJSHandleMessage(NSDictionary *message) {
   if ([command isEqualToString:@"navigate"]) {
     [controller navigate:AtomJSString(message[@"url"], @"about:blank")];
   } else if ([command isEqualToString:@"show"]) {
+    [NSApp unhide:nil];
     [controller.window makeKeyAndOrderFront:nil];
+    [controller.window orderFrontRegardless];
     [NSApp activateIgnoringOtherApps:YES];
   } else if ([command isEqualToString:@"hide"]) {
     [controller.window orderOut:nil];
   } else if ([command isEqualToString:@"focus"]) {
+    [NSApp unhide:nil];
     [controller.window makeKeyAndOrderFront:nil];
+    [controller.window orderFrontRegardless];
     [NSApp activateIgnoringOtherApps:YES];
   } else if ([command isEqualToString:@"close"] || [command isEqualToString:@"destroy"]) {
     [controller.window close];
@@ -433,14 +496,22 @@ static void AtomJSHandleMessage(NSDictionary *message) {
 
 static void AtomJSConsumeInput(void) {
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    NSFileHandle *input = [NSFileHandle fileHandleWithStandardInput];
     NSMutableData *buffer = [NSMutableData data];
 
     while (YES) {
       @autoreleasepool {
-        NSData *chunk = [input readDataOfLength:4096];
-        if (chunk.length == 0) break;
-        [buffer appendData:chunk];
+        unsigned char bytes[4096];
+        ssize_t count = read(STDIN_FILENO, bytes, sizeof(bytes));
+        if (count < 0) {
+          if (errno == EINTR) continue;
+          AtomJSEmit(@{
+            @"type": @"host-error",
+            @"error": [NSString stringWithFormat:@"Could not read native-host input: %s", strerror(errno)]
+          });
+          break;
+        }
+        if (count == 0) break;
+        [buffer appendBytes:bytes length:(NSUInteger)count];
 
         while (YES) {
           const unsigned char *bytes = buffer.bytes;
@@ -492,26 +563,53 @@ static void AtomJSInstallMenu(void) {
   NSApp.mainMenu = mainMenu;
 }
 
+@interface AtomJSApplicationDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation AtomJSApplicationDelegate
+
+- (void)applicationWillFinishLaunching:(NSNotification *)notification {
+  AtomJSConfigureApplicationIdentity(NSApp);
+  AtomJSInstallMenu();
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+  AtomJSConsumeInput();
+  AtomJSEmit(@{
+    @"type": @"ready",
+    @"pid": @([[NSProcessInfo processInfo] processIdentifier]),
+    @"appName": atomAppName,
+    @"appId": atomAppIdentifier
+  });
+}
+
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
+  return NO;
+}
+
+@end
+
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
     for (int index = 1; index + 1 < argc; index += 1) {
       if (strcmp(argv[index], "--app-name") == 0) {
         atomAppName = [NSString stringWithUTF8String:argv[index + 1]] ?: @"AtomJS App";
         index += 1;
+      } else if (strcmp(argv[index], "--app-id") == 0) {
+        atomAppIdentifier = [NSString stringWithUTF8String:argv[index + 1]] ?: @"com.atomjs.app";
+        index += 1;
+      } else if (strcmp(argv[index], "--app-icon") == 0) {
+        atomAppIconPath = [NSString stringWithUTF8String:argv[index + 1]];
+        index += 1;
       }
     }
 
+    [[NSProcessInfo processInfo] setProcessName:atomAppName];
     atomWindows = [NSMutableDictionary dictionary];
     NSApplication *application = [NSApplication sharedApplication];
+    AtomJSApplicationDelegate *delegate = [[AtomJSApplicationDelegate alloc] init];
+    application.delegate = delegate;
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-    AtomJSInstallMenu();
-    AtomJSConsumeInput();
-
-    AtomJSEmit(@{
-      @"type": @"ready",
-      @"pid": @([[NSProcessInfo processInfo] processIdentifier])
-    });
-
     [application run];
   }
 

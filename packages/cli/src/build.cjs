@@ -70,6 +70,7 @@ async function localBuild(project, target, options = {}) {
       appDir,
       target,
       productName,
+      appId: project.config.appId,
       payloadPath
     });
 
@@ -106,7 +107,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.4.2-alpha.0',
+      atomjsVersion: '0.4.3-alpha.0',
       target,
       productName,
       appId: project.config.appId,
@@ -287,7 +288,7 @@ async function createApplicationPayload(appDir, outputPath) {
   await fs.promises.writeFile(outputPath, compressed);
 }
 
-async function createSeaLauncher({ executablePath, appDir, target, productName, payloadPath = null }) {
+async function createSeaLauncher({ executablePath, appDir, target, productName, appId, payloadPath = null }) {
   const work = path.join(path.dirname(executablePath), '.sea-' + crypto.randomBytes(5).toString('hex'));
   await fse.ensureDir(work);
   const launcherPath = path.join(work, 'launcher.cjs');
@@ -295,7 +296,7 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   const configPath = path.join(work, 'sea-config.json');
 
   if (!payloadPath) throw new Error('AtomJS SEA payload is required.');
-  const launcher = createEmbeddedLauncherSource(productName);
+  const launcher = createEmbeddedLauncherSource(productName, appId);
   await fs.promises.writeFile(launcherPath, launcher, 'utf8');
 
   const seaConfig = {
@@ -314,8 +315,8 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   if (target === 'windows') {
     await prepareWindowsExecutableForInjection(executablePath);
   }
-  if (target === 'macos' && commandExists('codesign', ['--version'])) {
-    spawnSync('codesign', ['--remove-signature', executablePath], { stdio: 'ignore' });
+  if (target === 'macos' && hasMacCodeSigningTool()) {
+    spawnSync('/usr/bin/codesign', ['--remove-signature', executablePath], { stdio: 'ignore' });
   }
 
   await inject(executablePath, 'NODE_SEA_BLOB', await fs.promises.readFile(blobPath), {
@@ -328,8 +329,8 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   } else {
     await fs.promises.chmod(executablePath, 0o755);
   }
-  if (target === 'macos' && commandExists('codesign', ['--version'])) {
-    await run('codesign', ['--force', '--sign', '-', executablePath]);
+  if (target === 'macos' && hasMacCodeSigningTool()) {
+    await run('/usr/bin/codesign', ['--force', '--sign', '-', executablePath]);
   }
   await fse.remove(work);
 }
@@ -396,7 +397,7 @@ function readPortableExecutableLayout(image) {
   };
 }
 
-function createEmbeddedLauncherSource(productName) {
+function createEmbeddedLauncherSource(productName, appId) {
   return `
 'use strict';
 const path = require('node:path');
@@ -409,6 +410,7 @@ const { pathToFileURL } = require('node:url');
 const { getAsset } = require('node:sea');
 
 const productName = ${JSON.stringify(productName)};
+const appId = ${JSON.stringify(appId || 'com.atomjs.app')};
 const payload = Buffer.from(getAsset('atom-app'));
 const payloadHash = crypto.createHash('sha256').update(payload).digest('hex').slice(0, 24);
 const dataRoot = process.platform === 'darwin'
@@ -448,10 +450,16 @@ if (!fs.existsSync(packagePath)) throw new Error('AtomJS could not materialize t
 const executableDir = path.dirname(process.execPath);
 process.chdir(appDir);
 process.env.ATOM_PROJECT_ROOT = appDir;
+process.env.ATOM_APP_NAME = productName;
+process.env.ATOM_APP_ID = appId;
 process.env.ATOM_BUILD = '1';
 process.env.ATOM_EMBEDDED_RUNTIME = '1';
 process.env.ATOM_WINDOW_HOST_ENTRY = path.join(appDir, 'vendor', 'atomjs', 'src', 'runtime', 'window-host.mjs');
 process.env.ATOM_MACOS_HOST_EXECUTABLE = path.join(executableDir, 'AtomJSWindowHost');
+const bundledMacIcon = path.join(executableDir, '..', 'Resources', 'AppIcon.icns');
+if (process.platform === 'darwin' && fs.existsSync(bundledMacIcon)) {
+  process.env.ATOM_APP_ICON = bundledMacIcon;
+}
 const hostModeIndex = process.argv.indexOf('--atomjs-window-host');
 if (hostModeIndex !== -1) {
   const hostEntry = process.env.ATOM_WINDOW_HOST_ENTRY;
@@ -558,6 +566,10 @@ function resolveNsisExecutable() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
+function hasMacCodeSigningTool() {
+  return process.platform === 'darwin' && fs.existsSync('/usr/bin/codesign');
+}
+
 async function packageMacOS({ project, buildRoot, unpacked, executableName, productName, hostSource }) {
   const outputs = [];
   const appBundle = path.join(buildRoot, `${productName}.app`);
@@ -622,7 +634,7 @@ ${iconEntry}
     await run('/usr/bin/plutil', ['-lint', plistPath]);
   }
 
-  if (commandExists('/usr/bin/codesign', ['--version'])) {
+  if (hasMacCodeSigningTool()) {
     await run('/usr/bin/codesign', ['--force', '--sign', '-', nativeHost]);
     await run('/usr/bin/codesign', ['--force', '--sign', '-', mainExecutable]);
     await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appBundle]);

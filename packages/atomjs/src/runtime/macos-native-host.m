@@ -114,6 +114,8 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
 @property(nonatomic, strong) NSNumber *windowId;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, weak) AtomJSWindowController *parentController;
+@property(nonatomic, assign) BOOL modal;
 - (instancetype)initWithWindowId:(NSNumber *)windowId config:(NSDictionary *)config;
 - (void)navigate:(NSString *)urlString;
 @end
@@ -130,9 +132,19 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   CGFloat height = MAX(240.0, [AtomJSNumber(config[@"height"], @600) doubleValue]);
   NSRect frame = NSMakeRect(0, 0, width, height);
 
-  NSWindowStyleMask style = NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+  NSWindowStyleMask style = 0;
+  if (AtomJSBoolean(config[@"closable"], YES)) style |= NSWindowStyleMaskClosable;
+  if (AtomJSBoolean(config[@"minimizable"], YES)) style |= NSWindowStyleMaskMiniaturizable;
   if (AtomJSBoolean(config[@"frame"], YES)) style |= NSWindowStyleMaskTitled;
   if (AtomJSBoolean(config[@"resizable"], YES)) style |= NSWindowStyleMaskResizable;
+
+  NSString *titleBarStyle = AtomJSString(config[@"titleBarStyle"], @"default");
+  BOOL usesHiddenTitleBar = [titleBarStyle isEqualToString:@"hidden"]
+    || [titleBarStyle isEqualToString:@"hiddenInset"]
+    || [titleBarStyle isEqualToString:@"customButtonsOnHover"];
+  if (usesHiddenTitleBar) {
+    style |= NSWindowStyleMaskFullSizeContentView;
+  }
 
   _window = [[NSWindow alloc]
     initWithContentRect:frame
@@ -144,8 +156,41 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   _window.title = AtomJSString(config[@"title"], atomAppName);
   _window.backgroundColor = AtomJSColor(config[@"backgroundColor"]);
   _window.tabbingMode = NSWindowTabbingModeDisallowed;
+  _window.alphaValue = MIN(1.0, MAX(0.0, [AtomJSNumber(config[@"opacity"], @1) doubleValue]));
+  _window.opaque = !AtomJSBoolean(config[@"transparent"], NO);
+  if (!_window.opaque) {
+    _window.backgroundColor = [NSColor clearColor];
+  }
 
-  if (AtomJSBoolean(config[@"center"], YES)) [_window center];
+  if (usesHiddenTitleBar) {
+    _window.titleVisibility = NSWindowTitleHidden;
+    _window.titlebarAppearsTransparent = YES;
+  }
+
+  if (!AtomJSBoolean(config[@"fullscreenable"], YES)) {
+    _window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenNone;
+  }
+  [_window standardWindowButton:NSWindowZoomButton].enabled = AtomJSBoolean(config[@"maximizable"], YES);
+  if (AtomJSBoolean(config[@"alwaysOnTop"], NO)) {
+    _window.level = NSFloatingWindowLevel;
+  }
+
+  CGFloat minWidth = [AtomJSNumber(config[@"minWidth"], @0) doubleValue];
+  CGFloat minHeight = [AtomJSNumber(config[@"minHeight"], @0) doubleValue];
+  CGFloat maxWidth = [AtomJSNumber(config[@"maxWidth"], @0) doubleValue];
+  CGFloat maxHeight = [AtomJSNumber(config[@"maxHeight"], @0) doubleValue];
+  if (minWidth > 0 || minHeight > 0) {
+    _window.contentMinSize = NSMakeSize(MAX(1.0, minWidth), MAX(1.0, minHeight));
+  }
+  if (maxWidth > 0 || maxHeight > 0) {
+    _window.contentMaxSize = NSMakeSize(maxWidth > 0 ? maxWidth : CGFLOAT_MAX, maxHeight > 0 ? maxHeight : CGFLOAT_MAX);
+  }
+
+  if ([config[@"x"] isKindOfClass:[NSNumber class]] && [config[@"y"] isKindOfClass:[NSNumber class]]) {
+    [_window setFrameOrigin:NSMakePoint([config[@"x"] doubleValue], [config[@"y"] doubleValue])];
+  } else if (AtomJSBoolean(config[@"center"], YES)) {
+    [_window center];
+  }
 
   WKUserContentController *contentController = [[WKUserContentController alloc] init];
   NSString *bridgeScript = AtomJSString(config[@"bridgeScript"], @"");
@@ -163,14 +208,40 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   _webView = [[WKWebView alloc] initWithFrame:frame configuration:webConfiguration];
   _webView.navigationDelegate = self;
   _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  if (AtomJSBoolean(config[@"transparent"], NO)) _webView.drawsBackground = NO;
   _window.contentView = _webView;
+
+  NSNumber *parentWindowId = AtomJSNumber(config[@"parentWindowId"], nil);
+  _parentController = parentWindowId ? atomWindows[parentWindowId] : nil;
+  _modal = AtomJSBoolean(config[@"modal"], NO) && _parentController != nil;
+
+  NSDictionary *trafficLightPosition = [config[@"trafficLightPosition"] isKindOfClass:[NSDictionary class]]
+    ? config[@"trafficLightPosition"]
+    : nil;
+  if (trafficLightPosition) {
+    CGFloat x = [AtomJSNumber(trafficLightPosition[@"x"], @0) doubleValue];
+    CGFloat y = [AtomJSNumber(trafficLightPosition[@"y"], @0) doubleValue];
+    NSButton *closeButton = [_window standardWindowButton:NSWindowCloseButton];
+    NSView *container = closeButton.superview;
+    if (container) {
+      NSPoint origin = container.frame.origin;
+      origin.x = x;
+      origin.y = MAX(0.0, _window.frame.size.height - container.frame.size.height - y);
+      [container setFrameOrigin:origin];
+    }
+  }
 
   [self navigate:AtomJSString(config[@"url"], @"about:blank")];
 
   if (AtomJSBoolean(config[@"show"], YES)) {
     [NSApp unhide:nil];
-    [_window makeKeyAndOrderFront:nil];
-    [_window orderFrontRegardless];
+    if (_modal) {
+      [_parentController.window beginSheet:_window completionHandler:nil];
+    } else {
+      if (_parentController) [_parentController.window addChildWindow:_window ordered:NSWindowAbove];
+      [_window makeKeyAndOrderFront:nil];
+      [_window orderFrontRegardless];
+    }
     [NSApp activateIgnoringOtherApps:YES];
   }
 
@@ -226,6 +297,13 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
+  if (self.parentController) {
+    if (self.modal && self.window.sheetParent) {
+      [self.window.sheetParent endSheet:self.window];
+    } else {
+      [self.parentController.window removeChildWindow:self.window];
+    }
+  }
   [atomWindows removeObjectForKey:self.windowId];
   AtomJSEmit(@{
     @"type": @"closed",
@@ -486,6 +564,14 @@ static void AtomJSHandleMessage(NSDictionary *message) {
     if ([bounds[@"width"] isKindOfClass:[NSNumber class]]) frame.size.width = MAX(1.0, [bounds[@"width"] doubleValue]);
     if ([bounds[@"height"] isKindOfClass:[NSNumber class]]) frame.size.height = MAX(1.0, [bounds[@"height"] doubleValue]);
     [controller.window setFrame:frame display:YES animate:NO];
+  } else if ([command isEqualToString:@"set-always-on-top"]) {
+    controller.window.level = AtomJSBoolean(message[@"value"], NO) ? NSFloatingWindowLevel : NSNormalWindowLevel;
+  } else if ([command isEqualToString:@"set-opacity"]) {
+    controller.window.alphaValue = MIN(1.0, MAX(0.0, [AtomJSNumber(message[@"value"], @1) doubleValue]));
+  } else if ([command isEqualToString:@"set-resizable"]) {
+    BOOL requested = AtomJSBoolean(message[@"value"], YES);
+    if (requested) controller.window.styleMask |= NSWindowStyleMaskResizable;
+    else controller.window.styleMask &= ~NSWindowStyleMaskResizable;
   } else {
     AtomJSRespond(requestId, NO, nil, [NSString stringWithFormat:@"Unsupported AtomJS native command: %@", command]);
     return;

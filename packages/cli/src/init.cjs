@@ -30,14 +30,14 @@ async function initCommand(directory, options = {}) {
       start: 'atom run build'
     },
     dependencies: {
-      '@atom-js-org/runtime': '0.4.5-alpha.0',
-      electron: 'npm:@atom-js-org/electron@0.4.5-alpha.0'
+      '@atom-js-org/runtime': '0.5.0-alpha.0',
+      electron: 'npm:@atom-js-org/electron@0.5.0-alpha.0'
     },
     optionalDependencies: {
       'webview-nodejs': '0.5.0'
     },
     devDependencies: {
-      '@atom-js-org/cli': '0.4.5-alpha.0'
+      '@atom-js-org/cli': '0.5.0-alpha.0'
     },
     overrides: {
       tar: '7.5.20'
@@ -50,12 +50,45 @@ async function initCommand(directory, options = {}) {
     main: 'src/main.js',
     icon: 'assets/icon.png',
     installerCredit: true,
+    build: {
+      artifactName: '${productName}-${version}-${target}-${arch}',
+      windows: {
+        icon: 'assets/icon.ico',
+        installerIcon: 'assets/icon.ico',
+        installMode: 'user',
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        allowDirectorySelection: true,
+        runAfterFinish: true
+      },
+      macos: {
+        icon: 'assets/icon.png',
+        bundleName: productName,
+        category: 'public.app-category.utilities',
+        minimumSystemVersion: '12.0',
+        dmg: {
+          enabled: true,
+          volumeName: productName
+        }
+      },
+      linux: {
+        icon: 'assets/icon.png',
+        binaryName: packageName,
+        packageName,
+        category: 'Utility',
+        appImage: true,
+        deb: true,
+        rpm: true
+      }
+    },
     github: {
       workflow: 'atom-build.yml'
     }
   }, null, 2));
 
   await fse.ensureDir(path.join(root, 'assets'));
+  await fse.copy(path.join(__dirname, '..', 'assets', 'default-icon.png'), path.join(root, 'assets', 'icon.png'));
+  await fse.copy(path.join(__dirname, '..', 'assets', 'default-icon.ico'), path.join(root, 'assets', 'icon.ico'));
   await fs.promises.writeFile(path.join(root, 'src', 'main.js'), mainTemplate());
   await fs.promises.writeFile(path.join(root, 'src', 'preload.js'), preloadTemplate());
   await fs.promises.writeFile(path.join(root, 'src', 'index.html'), htmlTemplate(productName));
@@ -213,7 +246,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev zenity
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev zenity rpm
       - uses: actions/setup-node@v4
         with:
           node-version: 22

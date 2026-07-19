@@ -5,20 +5,260 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "appId": { "type": "string", "minLength": 1 },
-    "productName": { "type": "string", "minLength": 1 },
-    "main": { "type": "string", "minLength": 1 },
-    "icon": { "type": ["string", "null"] },
+    "appId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "productName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "main": {
+      "type": "string",
+      "minLength": 1
+    },
+    "icon": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "files": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
-    "installerCredit": { "type": "boolean", "default": true },
+    "installerCredit": {
+      "type": "boolean",
+      "default": true
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifactName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "icon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "installerIcon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "headerImage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sidebarImage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "language": {
+              "type": "string",
+              "minLength": 1
+            },
+            "installMode": {
+              "enum": [
+                "user",
+                "machine"
+              ]
+            },
+            "installDirectory": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "createDesktopShortcut": {
+              "type": "boolean"
+            },
+            "createStartMenuShortcut": {
+              "type": "boolean"
+            },
+            "allowDirectorySelection": {
+              "type": "boolean"
+            },
+            "runAfterFinish": {
+              "type": "boolean"
+            },
+            "welcomeText": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "finishText": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publisher": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestedExecutionLevel": {
+              "enum": [
+                "asInvoker",
+                "highestAvailable",
+                "requireAdministrator"
+              ]
+            }
+          }
+        },
+        "macos": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "icon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bundleName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minimumSystemVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "copyright": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "signingIdentity": {
+              "type": "string",
+              "minLength": 1
+            },
+            "entitlements": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hardenedRuntime": {
+              "type": "boolean"
+            },
+            "dmg": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "artifactName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "volumeName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "background": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "linux": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "icon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "binaryName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "packageName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maintainer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "appImage": {
+              "type": "boolean"
+            },
+            "deb": {
+              "type": "boolean"
+            },
+            "rpmDependencies": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "rpm": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
     "github": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "workflow": { "type": "string", "default": "atom-build.yml" }
+        "workflow": {
+          "type": "string",
+          "default": "atom-build.yml"
+        }
       }
     }
   }

@@ -134,3 +134,71 @@ test('preload require accepts the electron module name', () => {
   assert.match(script, /specifier === 'electron'/);
   assert.match(script, /electron\/renderer/);
 });
+
+test('BrowserWindow supports parent/modal relationships and customizable native options', () => {
+  const parent = new atom.BrowserWindow({ show: false, title: 'Parent' });
+  state.focusedWindowId = parent.id;
+  const child = new atom.BrowserWindow({
+    show: false,
+    modal: true,
+    alwaysOnTop: true,
+    opacity: 0.85,
+    resizable: false,
+    frame: false,
+    transparent: true,
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 14 },
+    minWidth: 420,
+    minHeight: 320,
+    maxWidth: 900,
+    maxHeight: 700
+  });
+
+  assert.equal(child.getParentWindow(), parent);
+  assert.deepEqual(parent.getChildWindows(), [child]);
+  assert.equal(child.isModal(), true);
+  assert.equal(child.isAlwaysOnTop(), true);
+  assert.equal(child.getOpacity(), 0.85);
+  assert.equal(child.isResizable(), false);
+
+  child._nativeHost = { send() {} };
+  child.setOpacity(0.6);
+  child.setAlwaysOnTop(false);
+  child.setResizable(true);
+  assert.equal(child.getOpacity(), 0.6);
+  assert.equal(child.isAlwaysOnTop(), false);
+  assert.equal(child.isResizable(), true);
+
+  child.destroy();
+  parent.destroy();
+  state.focusedWindowId = null;
+});
+
+test('Windows host activates OAuth windows and supports native ownership', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'runtime', 'window-host.mjs'),
+    'utf8'
+  );
+  assert.match(source, /GWLP_HWNDPARENT/);
+  assert.match(source, /EnableWindow\(\$parent, \$false\)/);
+  assert.match(source, /AttachThreadInput/);
+  assert.match(source, /GetForegroundWindow/);
+  assert.match(source, /SetActiveWindow\(\$child\)/);
+  assert.match(source, /SetForegroundWindow\(\$child\)/);
+  assert.match(source, /windowsHide: true/);
+});
+
+test('macOS host maps modal, title-bar and visual options to AppKit', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'runtime', 'macos-native-host.m'),
+    'utf8'
+  );
+  assert.match(source, /beginSheet:_window/);
+  assert.match(source, /addChildWindow:_window ordered:NSWindowAbove/);
+  assert.match(source, /NSFloatingWindowLevel/);
+  assert.match(source, /titlebarAppearsTransparent/);
+  assert.match(source, /trafficLightPosition/);
+  assert.match(source, /set-always-on-top/);
+  assert.match(source, /set-opacity/);
+  assert.match(source, /set-resizable/);
+});

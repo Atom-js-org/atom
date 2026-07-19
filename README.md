@@ -39,6 +39,39 @@ const { BrowserWindow } = require('electron');
 
 The facade supports CommonJS, ESM, `electron/main`, `electron/renderer`, preload `contextBridge`, and Electron runtime detection through `process.versions.electron`.
 
+## Native window customization
+
+AtomJS maps common Electron window options to AppKit and Win32/WebView hosts:
+
+```js
+const main = new BrowserWindow({
+  width: 1100,
+  height: 760,
+  minWidth: 720,
+  minHeight: 520,
+  frame: true,
+  resizable: true,
+  alwaysOnTop: false,
+  transparent: false,
+  opacity: 1,
+  titleBarStyle: 'hiddenInset',
+  trafficLightPosition: { x: 18, y: 16 }
+});
+
+const login = new BrowserWindow({
+  parent: main,
+  modal: true,
+  width: 520,
+  height: 720
+});
+```
+
+Owned and modal windows stay associated with their parent. Windows login/OAuth windows are explicitly activated instead of remaining behind the main application. macOS uses native sheets for modal windows.
+
+## Distribution customization
+
+`atom.config.json` controls application icons, artifact names, Windows executable metadata and NSIS pages, macOS bundle/signing/DMG properties, and Linux package names and dependencies. Linux builds can emit a standalone binary, portable tarball, AppDir, AppImage, `.deb`, and `.rpm` when the corresponding packaging tool is available. See [`docs/BUILDING.md`](docs/BUILDING.md).
+
 ## CLI
 
 ```bash
@@ -67,7 +100,7 @@ A local build is created when the requested target matches the host OS. Cross-OS
 AtomJS mirrors Electron's familiar split:
 
 - **Main process:** regular Node.js; owns application lifecycle, filesystem access, dependencies, and privileged APIs.
-- **BrowserWindow:** sends window commands to one shared native host per application, so multiple windows remain part of the same desktop app.
+- **BrowserWindow:** maps Electron-style options and parent/modal relationships to native platform windows.
 - **Renderer:** ordinary HTML, CSS, and browser JavaScript.
 - **Preload bridge:** supports `require('electron')`, `contextBridge`, and `ipcRenderer`.
 - **IPC:** authenticated localhost WebSocket transport between the renderer and Node.js main process.
@@ -77,7 +110,7 @@ AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Window
 
 ## Electron compatibility
 
-AtomJS 0.2 provides an Electron-compatible package that is installed locally under the alias `electron`, backed by AtomJS rather than Electron. It currently includes the working core (`app`, `BrowserWindow`, `webContents`, IPC, dialogs, shell, clipboard, menus-as-data, session compatibility, navigation events, and preload APIs) plus compatibility surfaces for many commonly imported Electron modules.
+AtomJS provides an Electron-compatible package that is installed locally under the alias `electron`, backed by AtomJS rather than Electron. It currently includes the working core (`app`, `BrowserWindow`, `webContents`, IPC, dialogs, shell, clipboard, menus-as-data, session compatibility, navigation events, and preload APIs) plus compatibility surfaces for many commonly imported Electron modules.
 
 Chromium-specific behavior and native platform features cannot become identical merely by changing the module name. APIs that are not implemented by the system-WebView runtime remain explicit compatibility stubs rather than silently pretending to work. The project goal is to expand functional Electron compatibility release by release while keeping the runtime lightweight.
 
@@ -85,7 +118,7 @@ Chromium-specific behavior and native platform features cannot become identical 
 
 AtomJS contains no Rust and does not bundle Chromium. Plain Node.js cannot directly create an AppKit/WKWebView window, so macOS uses a small Objective-C host compiled with Apple's Command Line Tools. The application logic and public API remain Node.js, while one native host owns all macOS windows. Windows and Linux still require a thin native adapter for WebView2 or WebKitGTK.
 
-This is an **alpha foundation**, not yet a production-complete reimplementation of every Electron API. The 0.2 compatibility layer fixes Electron-oriented dependencies such as MSMC resolving the module and adds repeated `did-finish-load` navigation events needed by OAuth flows.
+This is an **alpha foundation**, not yet a production-complete reimplementation of every Electron API. The compatibility layer supports Electron-oriented dependencies such as MSMC, repeated OAuth navigation events, owned login windows and foreground activation on Windows.
 
 ## Install this repository
 

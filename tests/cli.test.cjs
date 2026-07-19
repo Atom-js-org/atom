@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { loadProject, validateTarget, hostTarget } = require('../packages/cli/src/utils.cjs');
+const { writeArArchive, normalizeDebVersion, normalizeRpmVersion } = require('../packages/cli/src/build.cjs');
 const { initCommand } = require('../packages/cli/src/init.cjs');
 
 test('build target validation matches the documented CLI', () => {
@@ -26,6 +27,12 @@ test('atom init creates Electron-like project structure and workflow', async () 
   assert.equal(project.config.productName, 'Sample App');
   assert.ok(fs.existsSync(path.join(projectRoot, 'src', 'preload.js')));
   assert.ok(fs.existsSync(path.join(projectRoot, '.github', 'workflows', 'atom-build.yml')));
+  assert.ok(fs.existsSync(path.join(projectRoot, 'assets', 'icon.png')));
+  assert.ok(fs.existsSync(path.join(projectRoot, 'assets', 'icon.ico')));
+  assert.equal(project.config.build.windows.icon, 'assets/icon.ico');
+  assert.equal(project.config.build.macos.icon, 'assets/icon.png');
+  assert.equal(project.config.build.linux.deb, true);
+  assert.equal(project.config.build.linux.rpm, true);
 
   const main = fs.readFileSync(path.join(projectRoot, 'src', 'main.js'), 'utf8');
   const preload = fs.readFileSync(path.join(projectRoot, 'src', 'preload.js'), 'utf8');
@@ -76,13 +83,19 @@ test('macOS embedded payload dereferences directory symlinks', async () => {
 });
 
 
-test('Windows release packaging uses a GUI PE executable and official WebView2 detection', () => {
+test('Windows release packaging uses a GUI PE executable, branded metadata and customizable NSIS', () => {
   const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
   const doctorSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'doctor.cjs'), 'utf8');
 
   assert.match(buildSource, /writeUInt16LE\(2, pe\.optionalHeaderOffset \+ 68\)/);
   assert.match(buildSource, /certificateDirectory = pe\.dataDirectoryOffset \+ \(8 \* 4\)/);
-  assert.match(buildSource, /WriteRegStr HKCU/);
+  assert.match(buildSource, /customizeWindowsExecutable/);
+  assert.match(buildSource, /require\('rcedit'\)/);
+  assert.match(buildSource, /requested-execution-level/);
+  assert.match(buildSource, /const registryRoot = installMode === 'machine' \? 'HKLM' : 'HKCU'/);
+  assert.match(buildSource, /MUI_HEADERIMAGE_BITMAP/);
+  assert.match(buildSource, /MUI_WELCOMEFINISHPAGE_BITMAP/);
+  assert.match(buildSource, /createDesktopShortcut/);
   assert.match(doctorSource, /F3017226-FE2A-4295-8BDF-00C3A9A7E4C5/);
   assert.match(doctorSource, /Get-ItemPropertyValue[^\n]+-Name 'pv'/);
   assert.doesNotMatch(doctorSource, /F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5/);
@@ -179,12 +192,104 @@ test('macOS bundle is signed on local staging storage and archived without resou
   assert.doesNotMatch(buildSource, /--sequesterRsrc/);
 });
 
-test('macOS DMG is created on local staging storage and copied to the output', () => {
+test('macOS DMG is customizable, staged locally and copied to the output', () => {
   const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
 
-  assert.match(buildSource, /temporaryDmgPath = path\.join\(bundleStageRoot, `\$\{productName\}\.dmg`\)/);
-  assert.match(buildSource, /'-srcfolder', appBundle/);
+  assert.match(buildSource, /const dmgRoot = path\.join\(bundleStageRoot, 'dmg-root'\)/);
+  assert.match(buildSource, /symlink\('\/Applications'/);
+  assert.match(buildSource, /config\.dmg\.background/);
+  assert.match(buildSource, /'-srcfolder', dmgRoot/);
   assert.match(buildSource, /fs\.promises\.copyFile\(temporaryDmgPath, dmgPath\)/);
   assert.match(buildSource, /ATOM_REQUIRE_DMG === '1'/);
   assert.doesNotMatch(buildSource, /'-srcfolder', finalAppBundle/);
+});
+
+test('loadProject preserves cross-platform packaging customization', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-config-'));
+  fs.writeFileSync(path.join(tempRoot, 'package.json'), JSON.stringify({
+    name: 'custom-app',
+    version: '2.3.4-beta.1',
+    description: 'Custom desktop app',
+    author: 'Example Company'
+  }));
+  fs.writeFileSync(path.join(tempRoot, 'atom.config.json'), JSON.stringify({
+    productName: 'Custom App',
+    icon: 'assets/icon.png',
+    build: {
+      artifactName: '${productName}-${target}-${arch}',
+      windows: {
+        icon: 'assets/app.ico',
+        installMode: 'machine',
+        createDesktopShortcut: false,
+        requestedExecutionLevel: 'requireAdministrator'
+      },
+      macos: {
+        bundleName: 'Custom App Pro',
+        signingIdentity: 'Developer ID Application: Example',
+        hardenedRuntime: true,
+        dmg: { volumeName: 'Custom Installer', background: 'assets/dmg.png' }
+      },
+      linux: {
+        packageName: 'custom-app',
+        binaryName: 'custom-app-bin',
+        dependencies: ['libgtk-3-0'],
+        rpmDependencies: ['gtk3'],
+        deb: true,
+        rpm: true
+      }
+    }
+  }));
+
+  const project = loadProject(tempRoot);
+  assert.equal(project.config.build.windows.installMode, 'machine');
+  assert.equal(project.config.build.windows.createDesktopShortcut, false);
+  assert.equal(project.config.build.windows.requestedExecutionLevel, 'requireAdministrator');
+  assert.equal(project.config.build.macos.bundleName, 'Custom App Pro');
+  assert.equal(project.config.build.macos.hardenedRuntime, true);
+  assert.equal(project.config.build.macos.dmg.volumeName, 'Custom Installer');
+  assert.deepEqual(project.config.build.linux.dependencies, ['libgtk-3-0']);
+  assert.deepEqual(project.config.build.linux.rpmDependencies, ['gtk3']);
+  assert.equal(project.config.build.linux.rpm, true);
+
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test('Linux packaging contains a standalone binary, Debian package, RPM path and AppImage path', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  assert.match(buildSource, /const portableBinary = path\.join\(buildRoot, binaryName\)/);
+  assert.match(buildSource, /debian-binary/);
+  assert.match(buildSource, /writeArArchive\(debPath/);
+  assert.match(buildSource, /commandExists\('rpmbuild'/);
+  assert.match(buildSource, /\.rpm`\)/);
+  assert.match(buildSource, /\.AppImage`\)/);
+  assert.equal(normalizeDebVersion('1.2.3-beta.1'), '1.2.3-beta.1');
+  assert.equal(normalizeRpmVersion('1.2.3-beta.1'), '1.2.3.beta.1');
+});
+
+test('Debian ar writer produces a valid archive header and member names', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-deb-ar-'));
+  const archivePath = path.join(tempRoot, 'sample.deb');
+  await writeArArchive(archivePath, [
+    { name: 'debian-binary', data: Buffer.from('2.0\n') },
+    { name: 'control.tar.gz', data: Buffer.from('control') },
+    { name: 'data.tar.gz', data: Buffer.from('data') }
+  ]);
+  const archive = fs.readFileSync(archivePath);
+  assert.equal(archive.subarray(0, 8).toString('ascii'), '!<arch>\n');
+  assert.match(archive.toString('ascii'), /debian-binary\//);
+  assert.match(archive.toString('ascii'), /control\.tar\.gz\//);
+  assert.match(archive.toString('ascii'), /data\.tar\.gz\//);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test('configuration schema exposes installer, app bundle and Linux package customization', () => {
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'atom.config.schema.json'), 'utf8'));
+  const build = schema.properties.build.properties;
+  assert.ok(build.windows.properties.installerIcon);
+  assert.ok(build.windows.properties.headerImage);
+  assert.ok(build.macos.properties.signingIdentity);
+  assert.ok(build.macos.properties.dmg.properties.background);
+  assert.ok(build.linux.properties.deb);
+  assert.ok(build.linux.properties.rpm);
+  assert.ok(build.linux.properties.rpmDependencies);
 });

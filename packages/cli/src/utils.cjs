@@ -38,20 +38,86 @@ function loadProject(projectInput) {
   const packageJson = readJson(packagePath);
   const configPath = path.join(root, 'atom.config.json');
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
+  const build = objectOrEmpty(config.build);
+  const windows = objectOrEmpty(build.windows);
+  const macos = objectOrEmpty(build.macos);
+  const linux = objectOrEmpty(build.linux);
+  const dmg = objectOrEmpty(macos.dmg);
+  const productName = config.productName || packageJson.productName || packageJson.name || 'AtomJS App';
+  const icon = config.icon || null;
 
   return {
     root,
     packageJson,
     config: {
       appId: config.appId || `com.atomjs.${sanitizeId(packageJson.name || 'app')}`,
-      productName: config.productName || packageJson.productName || packageJson.name || 'AtomJS App',
+      productName,
       main: config.main || packageJson.main || 'main.js',
-      icon: config.icon || null,
+      icon,
       files: config.files || ['**/*'],
       installerCredit: config.installerCredit !== false,
+      build: {
+        artifactName: build.artifactName || '${productName}-${version}-${target}-${arch}',
+        windows: {
+          icon: windows.icon || icon,
+          installerIcon: windows.installerIcon || windows.icon || icon,
+          headerImage: windows.headerImage || null,
+          sidebarImage: windows.sidebarImage || null,
+          language: windows.language || 'English',
+          installMode: windows.installMode === 'machine' ? 'machine' : 'user',
+          installDirectory: windows.installDirectory || null,
+          createDesktopShortcut: windows.createDesktopShortcut !== false,
+          createStartMenuShortcut: windows.createStartMenuShortcut !== false,
+          allowDirectorySelection: windows.allowDirectorySelection !== false,
+          runAfterFinish: windows.runAfterFinish !== false,
+          welcomeText: windows.welcomeText || null,
+          finishText: windows.finishText || null,
+          publisher: windows.publisher || null,
+          requestedExecutionLevel: ['asInvoker', 'highestAvailable', 'requireAdministrator'].includes(windows.requestedExecutionLevel)
+            ? windows.requestedExecutionLevel
+            : 'asInvoker'
+        },
+        macos: {
+          icon: macos.icon || icon,
+          bundleName: macos.bundleName || productName,
+          category: macos.category || 'public.app-category.utilities',
+          minimumSystemVersion: macos.minimumSystemVersion || '12.0',
+          copyright: macos.copyright || null,
+          signingIdentity: macos.signingIdentity || '-',
+          entitlements: macos.entitlements || null,
+          hardenedRuntime: macos.hardenedRuntime === true,
+          dmg: {
+            enabled: dmg.enabled !== false,
+            artifactName: dmg.artifactName || null,
+            volumeName: dmg.volumeName || productName,
+            background: dmg.background || null
+          }
+        },
+        linux: {
+          icon: linux.icon || icon,
+          binaryName: linux.binaryName || sanitizeFilename(packageJson.name || productName).toLowerCase().replace(/\s+/g, '-'),
+          packageName: linux.packageName || sanitizeId(packageJson.name || productName),
+          category: linux.category || 'Utility',
+          maintainer: linux.maintainer || null,
+          description: linux.description || packageJson.description || productName,
+          dependencies: Array.isArray(linux.dependencies)
+            ? linux.dependencies.map(String)
+            : ['libgtk-3-0', 'libwebkit2gtk-4.1-0'],
+          rpmDependencies: Array.isArray(linux.rpmDependencies)
+            ? linux.rpmDependencies.map(String)
+            : ['gtk3', 'webkit2gtk4.1'],
+          appImage: linux.appImage !== false,
+          deb: linux.deb !== false,
+          rpm: linux.rpm !== false
+        }
+      },
       github: config.github || {}
     }
   };
+}
+
+function objectOrEmpty(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function normalizeSpawn(command, args) {

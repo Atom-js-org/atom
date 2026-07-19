@@ -1,4 +1,4 @@
-# Building
+# Building and distribution customization
 
 ## Local target
 
@@ -8,56 +8,127 @@ atom build macos
 atom build linux
 ```
 
-Platform packages:
+A local build must match the host operating system. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
 
-- Windows: unpacked application, ZIP, NSIS script, and an EXE installer when `makensis` is available.
-- macOS: a native `.app`, ZIP, and DMG when `hdiutil` is available.
-- Linux: tar.gz, AppDir, and AppImage when `appimagetool` is available.
+## Configuration
 
-### macOS layout
+Build output is controlled from `atom.config.json`:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/Atom-js-org/atom/main/atom.config.schema.json",
+  "appId": "com.example.myapp",
+  "productName": "My App",
+  "main": "src/main.js",
+  "icon": "assets/icon.png",
+  "build": {
+    "artifactName": "${productName}-${version}-${target}-${arch}",
+    "windows": {
+      "icon": "assets/icon.ico",
+      "installerIcon": "assets/icon.ico",
+      "headerImage": "assets/installer-header.bmp",
+      "sidebarImage": "assets/installer-sidebar.bmp",
+      "language": "English",
+      "installMode": "user",
+      "installDirectory": null,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "allowDirectorySelection": true,
+      "runAfterFinish": true,
+      "welcomeText": null,
+      "finishText": null,
+      "publisher": "Example Company",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "macos": {
+      "icon": "assets/icon.png",
+      "bundleName": "My App",
+      "category": "public.app-category.utilities",
+      "minimumSystemVersion": "12.0",
+      "copyright": "Copyright © Example Company",
+      "signingIdentity": "-",
+      "entitlements": null,
+      "hardenedRuntime": false,
+      "dmg": {
+        "enabled": true,
+        "artifactName": "${productName}-${version}-${arch}-installer",
+        "volumeName": "My App",
+        "background": "assets/dmg-background.png"
+      }
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "binaryName": "my-app",
+      "packageName": "my-app",
+      "category": "Utility",
+      "maintainer": "Example Company <dev@example.com>",
+      "description": "My desktop application",
+      "dependencies": ["libgtk-3-0", "libwebkit2gtk-4.1-0"],
+      "rpmDependencies": ["gtk3", "webkit2gtk4.1"],
+      "appImage": true,
+      "deb": true,
+      "rpm": true
+    }
+  }
+}
+```
+
+Artifact templates support `${productName}`, `${version}`, `${target}`, `${arch}` and `${appId}`.
+
+## Windows output
 
 ```text
-build/macos/
-├── <Product Name>.app/
-│   └── Contents/
-│       ├── Info.plist
-│       ├── MacOS/
-│       │   ├── <Product Name>
-│       │   └── AtomJSWindowHost
-│       └── Resources/
-│           └── ATOMJS-CREDIT.txt
-├── <Product Name>-macos.zip
-├── <Product Name>.dmg
+build/windows/
+├── portable/
+│   ├── My App.exe
+│   └── ATOMJS-CREDIT.txt
+├── My App-<version>-windows-<arch>-portable.zip
+├── My App-<version>-windows-<arch>-setup.exe
+├── installer.nsi
 └── manifest.json
 ```
 
-The product executable is a Mach-O Node.js SEA binary with the application payload embedded as an asset. `AtomJSWindowHost` is a small Cocoa/WKWebView executable compiled for the target Mac. One host owns every window. The build does not contain `Resources/app`, a loose project source directory, `osascript`, or a separate Node runtime file.
+The final executable uses the Windows GUI subsystem, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
 
-The alpha builder ad-hoc signs and verifies the complete bundle. Public distribution still requires the developer's Apple Developer ID certificate and notarization.
+## macOS output
 
-### Windows and Linux
-
-Windows and Linux currently retain the existing unpacked runtime layout while the shared native-host and embedded-payload work is ported to WebView2 and WebKitGTK. They still do not bundle Electron or a private Chromium runtime.
-
-## All operating systems from any host
-
-```bash
-atom build all
+```text
+build/macos/
+├── My App.app/
+│   └── Contents/
+│       ├── Info.plist
+│       ├── MacOS/
+│       │   ├── My App
+│       │   └── AtomJSWindowHost
+│       └── Resources/
+│           ├── AppIcon.icns
+│           └── ATOMJS-CREDIT.txt
+├── My App-<version>-macos-<arch>.zip
+├── My App-<version>-macos-<arch>-installer.dmg
+└── manifest.json
 ```
 
-Native installers, platform WebViews, native Node addons, signing and macOS packaging cannot be reliably produced for every target on one arbitrary local OS. AtomJS dispatches the included `atom-build.yml` workflow to GitHub-hosted Windows, macOS and Linux runners, waits for completion, then downloads artifacts into `build/<os>`.
+A PNG icon is converted to ICNS with the system `sips` and `iconutil` tools. An existing ICNS can be supplied directly. The bundle supports custom identifiers, names, categories, minimum macOS version, signing identity, entitlements and hardened runtime. DMG creation is optional unless `ATOM_REQUIRE_DMG=1` is set.
 
-Requirements:
+## Linux output
 
-1. Commit `.github/workflows/atom-build.yml`.
-2. Install GitHub CLI (`gh`).
-3. Run `gh auth login`.
-4. Push the project to GitHub.
+```text
+build/linux/
+├── my-app
+├── My App-<version>-linux-<arch>-portable.tar.gz
+├── My App.AppDir/
+├── My App-<version>-linux-<arch>.AppImage
+├── My App-<version>-linux-<arch>.deb
+├── My App-<version>-linux-<arch>.rpm
+└── manifest.json
+```
+
+The standalone binary and tarball are always produced. The builder creates a Debian package without requiring `dpkg-deb`. It creates an RPM when `rpmbuild` is available and an AppImage when `appimagetool` is available. AppImage is the distro-neutral artifact; `.deb` and `.rpm` provide native package-manager integration.
 
 ## Signing
 
-The alpha builder creates unsigned or ad-hoc signed output. Production distribution requires developer-owned certificates:
+Ad-hoc signing is the default on macOS. Public distribution still requires developer-owned credentials:
 
-- Windows Authenticode certificate
-- Apple Developer ID signing and notarization
-- optional Linux package/repository signing
+- Windows Authenticode certificate and signing step.
+- Apple Developer ID, hardened runtime, entitlements and notarization.
+- Optional Linux repository/package signing.

@@ -49,7 +49,7 @@ Arbitrary Node.js `require()` calls are intentionally unavailable in the rendere
 
 ## Packaged application payload
 
-On macOS, production code and production dependencies are compressed into an AtomJS payload and embedded in the Node.js Single Executable Application. The `.app` bundle no longer exposes a `Resources/app` source tree or a second `Resources/runtime/node` executable. On first launch, the signed executable materializes its payload into a versioned application-data cache and starts the project main script from there.
+Production code and production dependencies are compressed into an AtomJS payload and embedded in the platform Single Executable Application. Release output does not expose a loose application source tree or a separate Node runtime file. On first launch, the executable materializes its payload into a versioned application-data cache and starts the project main script from there.
 
 ## IPC security
 

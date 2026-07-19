@@ -1,30 +1,19 @@
 # Roadmap
 
-## 0.3 native macOS application
+## 0.5 windowing and distribution customization
 
-- one shared Cocoa/WKWebView host per application
-- native window controls and dialogs without `osascript`
-- embedded macOS application payload
-- signed and verified `.app`, ZIP, and DMG output
+- owned and modal secondary windows
+- foreground-safe Windows OAuth windows
+- expanded native `BrowserWindow` options
+- configurable Windows installer and executable resources
+- configurable macOS bundle, icon, signing and DMG assets
+- standalone Linux binary, AppImage, Debian and RPM packaging
 
-## 0.4 shared Windows and Linux hosts
+## Next
 
-- one WebView2 host per Windows application
-- one WebKitGTK host per Linux application
-- embedded payloads without loose application source directories
-- native menu, tray, shortcuts and notifications
-
-## 0.5 distribution
-
-- Windows signing
-- macOS Developer ID signing and notarization
-- Linux deb/rpm packages
-- delta updates
-- release publishing
-
-## 1.0
-
-- stable API compatibility table
-- automated WebView compatibility tests
-- hardened navigation and permission policy
-- long-term support release process
+- shared native Windows WebView2 host instead of one adapter process per window
+- shared native Linux WebKitGTK host
+- runtime window mutations on every platform
+- Windows Authenticode and macOS notarization workflows
+- update publishing and delta updates
+- stable compatibility matrix and long-term support process

@@ -15,6 +15,14 @@ class BrowserWindow extends EventEmitter {
   constructor(options = {}) {
     super();
     this.id = state.nextWindowId++;
+    const explicitParent = options.parent instanceof BrowserWindow && !options.parent.isDestroyed()
+      ? options.parent
+      : null;
+    const modalParent = !explicitParent && options.modal === true
+      ? BrowserWindow.getFocusedWindow()
+      : null;
+    this._parent = explicitParent || modalParent || null;
+    this._children = new Set();
     this.options = normalizeOptions(options);
     this.webContents = new WebContents(this);
     this._child = null;
@@ -32,12 +40,15 @@ class BrowserWindow extends EventEmitter {
     this._fullScreen = false;
     this._maximized = false;
     this._minimized = false;
+    this._alwaysOnTop = this.options.alwaysOnTop;
+    this._opacity = this.options.opacity;
     this._bounds = {
-      x: 0,
-      y: 0,
+      x: this.options.x == null ? 0 : this.options.x,
+      y: this.options.y == null ? 0 : this.options.y,
       width: this.options.width,
       height: this.options.height
     };
+    if (this._parent) this._parent._children.add(this);
     state.windows.set(this.id, this);
   }
 
@@ -82,12 +93,33 @@ class BrowserWindow extends EventEmitter {
     if (preloadPath) preloadCode = await fs.promises.readFile(path.resolve(preloadPath), 'utf8');
 
     const config = {
+      windowId: this.id,
       title: this.options.title || app.getName(),
       width: this.options.width,
       height: this.options.height,
+      x: this.options.x,
+      y: this.options.y,
       resizable: this.options.resizable,
       center: this.options.center,
       frame: this.options.frame,
+      parentWindowId: this._parent ? this._parent.id : null,
+      parentProcessId: this._parent && this._parent._child ? this._parent._child.pid : null,
+      modal: this.options.modal,
+      alwaysOnTop: this.options.alwaysOnTop,
+      focusable: this.options.focusable,
+      closable: this.options.closable,
+      minimizable: this.options.minimizable,
+      maximizable: this.options.maximizable,
+      fullscreenable: this.options.fullscreenable,
+      skipTaskbar: this.options.skipTaskbar,
+      transparent: this.options.transparent,
+      opacity: this.options.opacity,
+      titleBarStyle: this.options.titleBarStyle,
+      trafficLightPosition: this.options.trafficLightPosition,
+      minWidth: this.options.minWidth,
+      minHeight: this.options.minHeight,
+      maxWidth: this.options.maxWidth,
+      maxHeight: this.options.maxHeight,
       show: this.options.show,
       backgroundColor: this.options.backgroundColor,
       debug: Boolean(this.options.webPreferences.devTools || process.env.ATOM_DEV === '1'),
@@ -124,7 +156,8 @@ class BrowserWindow extends EventEmitter {
     this._child = spawn(nodeExecutable, hostArgs, {
       cwd: state.projectRoot,
       env: process.env,
-      stdio: ['ignore', 'pipe', 'inherit']
+      stdio: ['ignore', 'pipe', 'inherit'],
+      windowsHide: true
     });
     this._hostAttached = true;
     attachHostOutput(this, this._child);
@@ -198,10 +231,12 @@ class BrowserWindow extends EventEmitter {
       return;
     }
     if (event.type === 'focus') {
+      state.focusedWindowId = this.id;
       this.emit('focus');
       return;
     }
     if (event.type === 'blur') {
+      if (state.focusedWindowId === this.id) state.focusedWindowId = null;
       this.emit('blur');
       return;
     }
@@ -266,6 +301,10 @@ class BrowserWindow extends EventEmitter {
     if (this._destroyed) return;
     this._destroyed = true;
     this._hostAttached = false;
+    if (state.focusedWindowId === this.id) state.focusedWindowId = null;
+    if (this._parent) this._parent._children.delete(this);
+    for (const child of this._children) child._parent = null;
+    this._children.clear();
     state.windows.delete(this.id);
     this.emit('closed', details);
     if (state.windows.size === 0 && !state.isQuitting) app.emit('window-all-closed');
@@ -337,6 +376,14 @@ class BrowserWindow extends EventEmitter {
     return this.options.title || app.getName();
   }
 
+  getParentWindow() {
+    return this._parent && !this._parent.isDestroyed() ? this._parent : null;
+  }
+
+  getChildWindows() {
+    return [...this._children].filter((child) => !child.isDestroyed());
+  }
+
   setMenu(menu) {
     this._menu = menu || null;
     return this;
@@ -366,6 +413,49 @@ class BrowserWindow extends EventEmitter {
 
   isFullScreen() {
     return this._fullScreen;
+  }
+
+  setAlwaysOnTop(value = true) {
+    this._alwaysOnTop = Boolean(value);
+    this.options.alwaysOnTop = this._alwaysOnTop;
+    if (!this._sendHostCommand({ command: 'set-always-on-top', value: this._alwaysOnTop })) {
+      console.warn('[AtomJS] Changing always-on-top after creation is not supported by the current platform host. Set alwaysOnTop in BrowserWindow options.');
+    }
+  }
+
+  isAlwaysOnTop() {
+    return this._alwaysOnTop;
+  }
+
+  setOpacity(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || number > 1) {
+      throw new TypeError('BrowserWindow.setOpacity expects a number between 0 and 1.');
+    }
+    this._opacity = number;
+    this.options.opacity = number;
+    if (!this._sendHostCommand({ command: 'set-opacity', value: number })) {
+      console.warn('[AtomJS] Changing opacity after creation is not supported by the current platform host. Set opacity in BrowserWindow options.');
+    }
+  }
+
+  getOpacity() {
+    return this._opacity;
+  }
+
+  setResizable(value) {
+    this.options.resizable = Boolean(value);
+    if (!this._sendHostCommand({ command: 'set-resizable', value: this.options.resizable })) {
+      console.warn('[AtomJS] Changing resizable after creation is not supported by the current platform host.');
+    }
+  }
+
+  isResizable() {
+    return this.options.resizable;
+  }
+
+  isModal() {
+    return this.options.modal;
   }
 
   setFullScreen(value = true) {
@@ -443,6 +533,10 @@ class BrowserWindow extends EventEmitter {
   }
 
   static getFocusedWindow() {
+    if (state.focusedWindowId != null) {
+      const focused = BrowserWindow.fromId(state.focusedWindowId);
+      if (focused && !focused.isDestroyed()) return focused;
+    }
     const windows = BrowserWindow.getAllWindows();
     return windows.length ? windows[windows.length - 1] : null;
   }
@@ -483,9 +577,27 @@ function normalizeOptions(options) {
   return {
     width: finiteOr(options.width, 800),
     height: finiteOr(options.height, 600),
+    x: finiteOrNull(options.x),
+    y: finiteOrNull(options.y),
     title: options.title ? String(options.title) : '',
     show: options.show !== false,
     resizable: options.resizable !== false,
+    modal: options.modal === true,
+    alwaysOnTop: options.alwaysOnTop === true,
+    focusable: options.focusable !== false,
+    closable: options.closable !== false,
+    minimizable: options.minimizable !== false,
+    maximizable: options.maximizable !== false,
+    fullscreenable: options.fullscreenable !== false,
+    skipTaskbar: options.skipTaskbar === true,
+    transparent: options.transparent === true,
+    opacity: clampOpacity(options.opacity),
+    titleBarStyle: normalizeTitleBarStyle(options.titleBarStyle),
+    trafficLightPosition: normalizePoint(options.trafficLightPosition),
+    minWidth: finiteOrZero(options.minWidth),
+    minHeight: finiteOrZero(options.minHeight),
+    maxWidth: finiteOrZero(options.maxWidth),
+    maxHeight: finiteOrZero(options.maxHeight),
     center: options.center !== false,
     frame: options.frame !== false,
     backgroundColor: options.backgroundColor || '#ffffff',
@@ -498,6 +610,38 @@ function normalizeOptions(options) {
       devTools: options.webPreferences ? options.webPreferences.devTools !== false : true
     }
   };
+}
+
+function clampOpacity(value) {
+  if (value == null) return 1;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 1;
+  return Math.min(1, Math.max(0, number));
+}
+
+function finiteOrZero(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+}
+
+function finiteOrNull(value) {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number) : null;
+}
+
+function normalizePoint(value) {
+  if (!value || typeof value !== 'object') return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+function normalizeTitleBarStyle(value) {
+  const normalized = String(value || 'default');
+  return ['default', 'hidden', 'hiddenInset', 'customButtonsOnHover'].includes(normalized)
+    ? normalized
+    : 'default';
 }
 
 function finiteOr(value, fallback) {

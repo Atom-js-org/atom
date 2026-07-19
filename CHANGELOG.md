@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-alpha.0
+
+- Brings Windows OAuth and secondary WebView windows to the foreground, with native owner/modal relationships when a parent is supplied.
+- Expands `BrowserWindow` customization with parent, modal, always-on-top, opacity, transparency, frame, title-bar, traffic-light, taskbar and size-constraint options.
+- Adds configurable Windows executable metadata and icons plus customizable NSIS branding, install scope, shortcuts, text and installation directory.
+- Adds configurable macOS app icons, bundle metadata, signing identity, entitlements, hardened runtime, artifact names and DMG assets.
+- Adds Linux standalone binaries, portable tarballs, AppDir, AppImage, Debian packages and RPM packages when `rpmbuild` is available.
+- Generates starter projects with usable PNG/ICO icons and a documented cross-platform build configuration.
+
 ## 0.4.5-alpha.0
 
 - Creates macOS DMG images entirely on the local temporary filesystem before copying them to the project output.

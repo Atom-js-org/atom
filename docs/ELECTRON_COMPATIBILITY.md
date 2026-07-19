@@ -51,7 +51,7 @@ The system WebView is not a Node.js process. Therefore arbitrary Node modules ar
 
 ## MSMC compatibility
 
-MSMC's Electron GUI path creates a `BrowserWindow`, calls `setMenu(null)`, loads an OAuth URL, reads `webContents.getURL()`, and listens for repeated `did-finish-load` events. AtomJS 0.2 implements those calls and reports macOS WKWebView navigations natively so redirects still arrive even when the remote page blocks the JavaScript bridge through Content Security Policy.
+MSMC's Electron GUI path creates a `BrowserWindow`, calls `setMenu(null)`, loads an OAuth URL, reads `webContents.getURL()`, and listens for repeated `did-finish-load` events. AtomJS implements those calls, reports WKWebView navigations natively, and explicitly activates Windows OAuth windows so the login UI is not hidden behind the main application. Applications can also pass `parent` and `modal` for native owned-window behavior.
 
 ## What “Electron-compatible” means
 

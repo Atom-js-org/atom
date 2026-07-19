@@ -71,6 +71,7 @@ async function localBuild(project, target, options = {}) {
       target,
       productName,
       appId: project.config.appId,
+      project,
       payloadPath
     });
 
@@ -107,7 +108,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.4.5-alpha.0',
+      atomjsVersion: '0.5.0-alpha.0',
       target,
       productName,
       appId: project.config.appId,
@@ -288,7 +289,7 @@ async function createApplicationPayload(appDir, outputPath) {
   await fs.promises.writeFile(outputPath, compressed);
 }
 
-async function createSeaLauncher({ executablePath, appDir, target, productName, appId, payloadPath = null }) {
+async function createSeaLauncher({ executablePath, appDir, target, productName, appId, project = null, payloadPath = null }) {
   const work = path.join(path.dirname(executablePath), '.sea-' + crypto.randomBytes(5).toString('hex'));
   await fse.ensureDir(work);
   const launcherPath = path.join(work, 'launcher.cjs');
@@ -313,6 +314,8 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
   await fs.promises.copyFile(process.execPath, executablePath);
 
   if (target === 'windows') {
+    if (!project) throw new Error('AtomJS requires project metadata to customize a Windows executable.');
+    await customizeWindowsExecutable({ project, executablePath, productName });
     await prepareWindowsExecutableForInjection(executablePath);
   }
   if (target === 'macos' && hasMacCodeSigningTool()) {
@@ -478,25 +481,282 @@ load(mainPath);
 `;
 }
 
-async function packageWindows({ project, buildRoot, unpacked, executableName, productName }) {
-  const outputs = [];
-  const zipPath = path.join(buildRoot, `${productName}-windows.zip`);
-  await archiveDirectory(unpacked, zipPath, 'zip');
-  outputs.push(zipPath);
 
-  const nsisPath = path.join(buildRoot, 'installer.nsi');
-  const installerPath = path.join(buildRoot, `${productName} Installer.exe`);
-  const escapedSource = unpacked.replace(/\\/g, '\\\\');
-  const version = String(project.packageJson.version || '0.0.0');
+function normalizeWindowsVersion(value) {
+  const parts = String(value || '0.0.0').match(/\d+/g) || ['0'];
+  return [...parts.slice(0, 4), '0', '0', '0', '0'].slice(0, 4).join('.');
+}
+
+function resolveProjectAsset(project, configured, expectedExtension = null) {
+  if (!configured) return null;
+  const resolved = path.resolve(project.root, configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`AtomJS build asset was not found: ${resolved}`);
+  }
+  if (expectedExtension && path.extname(resolved).toLowerCase() !== expectedExtension.toLowerCase()) {
+    throw new Error(`AtomJS expected a ${expectedExtension} asset: ${resolved}`);
+  }
+  return resolved;
+}
+
+function platformArchitecture() {
+  if (process.arch === 'x64') return 'x64';
+  if (process.arch === 'arm64') return 'arm64';
+  if (process.arch === 'ia32') return 'ia32';
+  return process.arch;
+}
+
+function renderArtifactBase(project, target, templateOverride = null) {
+  const template = templateOverride || project.config.build.artifactName;
+  const variables = {
+    productName: project.config.productName,
+    version: String(project.packageJson.version || '0.0.0'),
+    target,
+    arch: platformArchitecture(),
+    appId: project.config.appId
+  };
+  const rendered = String(template || '${productName}-${version}-${target}-${arch}')
+    .replace(/\$\{(productName|version|target|arch|appId)\}/g, (_, key) => variables[key]);
+  return sanitizeFilename(rendered);
+}
+
+function packageAuthor(project) {
   const author = project.packageJson.author;
-  const publisher = typeof author === 'string'
+  if (typeof author === 'string' && author.trim()) return author.trim();
+  if (author && typeof author === 'object') {
+    const name = String(author.name || '').trim();
+    const email = String(author.email || '').trim();
+    if (name && email) return `${name} <${email}>`;
+    if (name) return name;
+  }
+  return 'AtomJS application';
+}
+
+function normalizeDebVersion(value) {
+  const normalized = String(value || '0.0.0')
+    .replace(/[^0-9A-Za-z.+:~\-]/g, '-')
+    .replace(/^-+/, '');
+  return normalized || '0.0.0';
+}
+
+function debArchitecture() {
+  if (process.arch === 'x64') return 'amd64';
+  if (process.arch === 'arm64') return 'arm64';
+  if (process.arch === 'ia32') return 'i386';
+  return process.arch;
+}
+
+function normalizeRpmVersion(value) {
+  const normalized = String(value || '0.0.0')
+    .replace(/[^0-9A-Za-z.+~]/g, '.')
+    .replace(/^\.+|\.+$/g, '');
+  return normalized || '0.0.0';
+}
+
+function rpmArchitecture() {
+  if (process.arch === 'x64') return 'x86_64';
+  if (process.arch === 'arm64') return 'aarch64';
+  if (process.arch === 'ia32') return 'i686';
+  return process.arch;
+}
+
+function rpmText(value) {
+  return String(value || '').replace(/%/g, '%%').replace(/\r?\n/g, ' ').trim();
+}
+
+async function writeArArchive(outputPath, members) {
+  const chunks = [Buffer.from('!<arch>\n', 'ascii')];
+  for (const member of members) {
+    const data = Buffer.isBuffer(member.data) ? member.data : Buffer.from(member.data);
+    const name = `${String(member.name).slice(0, 15)}/`.padEnd(16, ' ');
+    const timestamp = String(Math.floor(Date.now() / 1000)).padEnd(12, ' ');
+    const owner = '0'.padEnd(6, ' ');
+    const group = '0'.padEnd(6, ' ');
+    const mode = '100644'.padEnd(8, ' ');
+    const size = String(data.length).padEnd(10, ' ');
+    const header = Buffer.from(`${name}${timestamp}${owner}${group}${mode}${size}\x60\n`, 'ascii');
+    chunks.push(header, data);
+    if (data.length % 2 !== 0) chunks.push(Buffer.from('\n'));
+  }
+  await fs.promises.writeFile(outputPath, Buffer.concat(chunks));
+}
+
+async function prepareMacIcon(project, resources, workRoot) {
+  const configured = project.config.build.macos.icon;
+  if (!configured) return null;
+  const source = resolveProjectAsset(project, configured);
+  const extension = path.extname(source).toLowerCase();
+  const destination = path.join(resources, 'AppIcon.icns');
+
+  if (extension === '.icns') {
+    await fse.copy(source, destination);
+    return destination;
+  }
+
+  if (extension !== '.png') {
+    throw new Error(`AtomJS macOS icons must be .icns or .png: ${source}`);
+  }
+  if (!commandExists('/usr/bin/sips', ['--help']) || !commandExists('/usr/bin/iconutil', ['--help'])) {
+    throw new Error('Converting a PNG macOS icon requires the system sips and iconutil tools.');
+  }
+
+  const iconset = path.join(workRoot, 'AppIcon.iconset');
+  await fse.remove(iconset);
+  await fse.ensureDir(iconset);
+  const entries = [
+    [16, 'icon_16x16.png'],
+    [32, 'icon_16x16@2x.png'],
+    [32, 'icon_32x32.png'],
+    [64, 'icon_32x32@2x.png'],
+    [128, 'icon_128x128.png'],
+    [256, 'icon_128x128@2x.png'],
+    [256, 'icon_256x256.png'],
+    [512, 'icon_256x256@2x.png'],
+    [512, 'icon_512x512.png'],
+    [1024, 'icon_512x512@2x.png']
+  ];
+  for (const [size, filename] of entries) {
+    await run('/usr/bin/sips', ['-z', String(size), String(size), source, '--out', path.join(iconset, filename)]);
+  }
+  await run('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', destination]);
+  return destination;
+}
+
+function codesignArguments(project, targetPath, deep = false) {
+  const config = project.config.build.macos;
+  const args = ['--force'];
+  if (deep) args.push('--deep');
+  if (config.hardenedRuntime) args.push('--options', 'runtime');
+  const entitlements = config.entitlements ? resolveProjectAsset(project, config.entitlements) : null;
+  if (entitlements) args.push('--entitlements', entitlements);
+  args.push('--sign', config.signingIdentity || '-', targetPath);
+  return args;
+}
+
+async function customizeWindowsExecutable({ project, executablePath, productName }) {
+  const config = project.config.build.windows;
+  let rceditModule;
+  try {
+    rceditModule = require('rcedit');
+  } catch (error) {
+    console.warn(`AtomJS could not load rcedit, so Windows executable metadata was not customized: ${error.message}`);
+    return;
+  }
+
+  const edit = rceditModule.rcedit || rceditModule.default || rceditModule;
+  const version = normalizeWindowsVersion(project.packageJson.version);
+  const author = project.packageJson.author;
+  const packagePublisher = typeof author === 'string'
     ? author
     : author && typeof author === 'object' && author.name
       ? author.name
       : 'AtomJS application';
+  const publisher = config.publisher || packagePublisher;
+  const iconSource = resolveProjectAsset(project, config.icon, '.ico');
+  const options = {
+    'file-version': version,
+    'product-version': version,
+    'requested-execution-level': config.requestedExecutionLevel,
+    'version-string': {
+      CompanyName: publisher,
+      FileDescription: productName,
+      ProductName: productName,
+      InternalName: productName,
+      OriginalFilename: path.basename(executablePath),
+      LegalCopyright: typeof project.packageJson.license === 'string' ? project.packageJson.license : ''
+    }
+  };
+  if (iconSource) options.icon = iconSource;
+
+  try {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
+      };
+      let result;
+      try {
+        result = edit(executablePath, options, finish);
+      } catch (error) {
+        finish(error);
+        return;
+      }
+      if (result && typeof result.then === 'function') result.then(() => finish(), finish);
+    });
+  } catch (error) {
+    throw new Error(`AtomJS could not customize the Windows executable: ${error.message}`);
+  }
+}
+
+async function packageWindows({ project, buildRoot, unpacked, executableName, productName }) {
+  const outputs = [];
+  const config = project.config.build.windows;
+  const artifactBase = renderArtifactBase(project, 'windows');
+  const zipPath = path.join(buildRoot, `${artifactBase}-portable.zip`);
+  await archiveDirectory(unpacked, zipPath, 'zip');
+  outputs.push(zipPath);
+
+  const nsisPath = path.join(buildRoot, 'installer.nsi');
+  const installerPath = path.join(buildRoot, `${artifactBase}-setup.exe`);
+  const escapedSource = unpacked.replace(/\\/g, '\\\\');
+  const version = String(project.packageJson.version || '0.0.0');
+  const author = project.packageJson.author;
+  const packagePublisher = typeof author === 'string'
+    ? author
+    : author && typeof author === 'object' && author.name
+      ? author.name
+      : 'AtomJS application';
+  const publisher = config.publisher || packagePublisher;
   const uninstallKey = `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${escapeNsis(project.config.appId)}`;
+  const installerIcon = resolveProjectAsset(project, config.installerIcon, '.ico');
+  const headerImage = resolveProjectAsset(project, config.headerImage, '.bmp');
+  const sidebarImage = resolveProjectAsset(project, config.sidebarImage, '.bmp');
+  const installMode = config.installMode === 'machine' ? 'machine' : 'user';
+  const requestLevel = installMode === 'machine' ? 'admin' : 'user';
+  const defaultInstallDir = installMode === 'machine'
+    ? `$PROGRAMFILES64\\${escapeNsis(productName)}`
+    : `$LOCALAPPDATA\\Programs\\${escapeNsis(productName)}`;
+  const installDir = config.installDirectory
+    ? escapeNsis(config.installDirectory)
+    : defaultInstallDir;
+  const registryRoot = installMode === 'machine' ? 'HKLM' : 'HKCU';
+  const shellContext = installMode === 'machine' ? 'all' : 'current';
   const credit = project.config.installerCredit
     ? `!define MUI_WELCOMEPAGE_TEXT "This installer will install ${escapeNsis(productName)}.$\\r$\\n$\\r$\\nPowered by AtomJS — https://github.com/Atom-js-org/atom"`
+    : '';
+  const welcomeText = config.welcomeText
+    ? `!define MUI_WELCOMEPAGE_TEXT "${escapeNsis(config.welcomeText)}"`
+    : credit;
+  const finishText = config.finishText
+    ? `!define MUI_FINISHPAGE_TEXT "${escapeNsis(config.finishText)}"`
+    : '';
+  const iconDirectives = installerIcon
+    ? `Icon "${installerIcon.replace(/\\/g, '\\\\')}"\n!define MUI_ICON "${installerIcon.replace(/\\/g, '\\\\')}"\n!define MUI_UNICON "${installerIcon.replace(/\\/g, '\\\\')}"`
+    : '';
+  const headerDirectives = headerImage
+    ? `!define MUI_HEADERIMAGE\n!define MUI_HEADERIMAGE_BITMAP "${headerImage.replace(/\\/g, '\\\\')}"`
+    : '';
+  const sidebarDirectives = sidebarImage
+    ? `!define MUI_WELCOMEFINISHPAGE_BITMAP "${sidebarImage.replace(/\\/g, '\\\\')}"`
+    : '';
+  const directoryPage = config.allowDirectorySelection ? '!insertmacro MUI_PAGE_DIRECTORY' : '';
+  const finishRun = config.runAfterFinish
+    ? `!define MUI_FINISHPAGE_RUN "$INSTDIR\\${escapeNsis(executableName)}"`
+    : '';
+  const desktopShortcut = config.createDesktopShortcut
+    ? `CreateShortcut "$DESKTOP\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"`
+    : '';
+  const startMenuInstall = config.createStartMenuShortcut
+    ? `CreateDirectory "$SMPROGRAMS\\${escapeNsis(productName)}"\n  CreateShortcut "$SMPROGRAMS\\${escapeNsis(productName)}\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"`
+    : '';
+  const startMenuRemove = config.createStartMenuShortcut
+    ? `RMDir /r "$SMPROGRAMS\\${escapeNsis(productName)}"`
+    : '';
+  const desktopRemove = config.createDesktopShortcut
+    ? `Delete "$DESKTOP\\${escapeNsis(productName)}.lnk"`
     : '';
   const script = `
 Unicode true
@@ -504,40 +764,43 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 Name "${escapeNsis(productName)}"
 OutFile "${installerPath.replace(/\\/g, '\\\\')}"
-InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(productName)}"
-RequestExecutionLevel user
+InstallDir "${installDir}"
+RequestExecutionLevel ${requestLevel}
 ShowInstDetails show
 ShowUninstDetails show
-${credit}
+${iconDirectives}
+${headerDirectives}
+${sidebarDirectives}
+${welcomeText}
+${finishText}
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
+${directoryPage}
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\\${escapeNsis(executableName)}"
+${finishRun}
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "${escapeNsis(config.language)}"
 Section "Install"
-  SetShellVarContext current
+  SetShellVarContext ${shellContext}
   SetOutPath "$INSTDIR"
   File /r "${escapedSource}\\*"
-  CreateDirectory "$SMPROGRAMS\\${escapeNsis(productName)}"
-  CreateShortcut "$SMPROGRAMS\\${escapeNsis(productName)}\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"
-  CreateShortcut "$DESKTOP\\${escapeNsis(productName)}.lnk" "$INSTDIR\\${escapeNsis(executableName)}"
+  ${startMenuInstall}
+  ${desktopShortcut}
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
-  WriteRegStr HKCU "${uninstallKey}" "DisplayName" "${escapeNsis(productName)}"
-  WriteRegStr HKCU "${uninstallKey}" "DisplayVersion" "${escapeNsis(version)}"
-  WriteRegStr HKCU "${uninstallKey}" "Publisher" "${escapeNsis(publisher)}"
-  WriteRegStr HKCU "${uninstallKey}" "DisplayIcon" "$INSTDIR\\${escapeNsis(executableName)}"
-  WriteRegStr HKCU "${uninstallKey}" "UninstallString" "$\\\"$INSTDIR\\Uninstall.exe$\\\""
-  WriteRegDWORD HKCU "${uninstallKey}" "NoModify" 1
-  WriteRegDWORD HKCU "${uninstallKey}" "NoRepair" 1
+  WriteRegStr ${registryRoot} "${uninstallKey}" "DisplayName" "${escapeNsis(productName)}"
+  WriteRegStr ${registryRoot} "${uninstallKey}" "DisplayVersion" "${escapeNsis(version)}"
+  WriteRegStr ${registryRoot} "${uninstallKey}" "Publisher" "${escapeNsis(publisher)}"
+  WriteRegStr ${registryRoot} "${uninstallKey}" "DisplayIcon" "$INSTDIR\\${escapeNsis(executableName)}"
+  WriteRegStr ${registryRoot} "${uninstallKey}" "UninstallString" "$\\\"$INSTDIR\\Uninstall.exe$\\\""
+  WriteRegDWORD ${registryRoot} "${uninstallKey}" "NoModify" 1
+  WriteRegDWORD ${registryRoot} "${uninstallKey}" "NoRepair" 1
 SectionEnd
 Section "Uninstall"
-  SetShellVarContext current
-  Delete "$DESKTOP\\${escapeNsis(productName)}.lnk"
-  RMDir /r "$SMPROGRAMS\\${escapeNsis(productName)}"
-  DeleteRegKey HKCU "${uninstallKey}"
+  SetShellVarContext ${shellContext}
+  ${desktopRemove}
+  ${startMenuRemove}
+  DeleteRegKey ${registryRoot} "${uninstallKey}"
   RMDir /r "$INSTDIR"
 SectionEnd
 `;
@@ -619,10 +882,12 @@ async function sanitizeMacBundle(appBundle) {
 
 async function packageMacOS({ project, buildRoot, unpacked, executableName, productName, hostSource }) {
   const outputs = [];
-  const finalAppBundle = path.join(buildRoot, `${productName}.app`);
+  const config = project.config.build.macos;
+  const bundleName = sanitizeFilename(config.bundleName || productName);
+  const finalAppBundle = path.join(buildRoot, `${bundleName}.app`);
   const stageBase = await resolveShortStageBase();
   const bundleStageRoot = await fs.promises.mkdtemp(path.join(stageBase, 'macos-app-'));
-  const appBundle = path.join(bundleStageRoot, `${productName}.app`);
+  const appBundle = path.join(bundleStageRoot, `${bundleName}.app`);
   const contents = path.join(appBundle, 'Contents');
   const macosDir = path.join(contents, 'MacOS');
   const resources = path.join(contents, 'Resources');
@@ -647,7 +912,7 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
       'clang',
       '-fobjc-arc',
       '-fmodules',
-      '-mmacosx-version-min=12.0',
+      `-mmacosx-version-min=${config.minimumSystemVersion}`,
       '-framework', 'Cocoa',
       '-framework', 'WebKit',
       hostSource,
@@ -655,12 +920,16 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
     ]);
     await fs.promises.chmod(nativeHost, 0o755);
 
-    let iconEntry = '';
-    const iconSource = project.config.icon ? path.resolve(project.root, project.config.icon) : null;
-    if (iconSource && fs.existsSync(iconSource) && path.extname(iconSource).toLowerCase() === '.icns') {
-      await fse.copy(iconSource, path.join(resources, 'AppIcon.icns'));
-      iconEntry = '<key>CFBundleIconFile</key><string>AppIcon</string>';
-    }
+    const preparedIcon = await prepareMacIcon(project, resources, bundleStageRoot);
+    const iconEntry = preparedIcon
+      ? '<key>CFBundleIconFile</key><string>AppIcon</string>'
+      : '';
+    const categoryEntry = config.category
+      ? `<key>LSApplicationCategoryType</key><string>${xml(config.category)}</string>`
+      : '';
+    const copyrightEntry = config.copyright
+      ? `<key>NSHumanReadableCopyright</key><string>${xml(config.copyright)}</string>`
+      : '';
 
     const version = String(project.packageJson.version || '0.0.0');
     const bundleVersion = (version.match(/\d+/g) || ['1']).slice(0, 3).join('.');
@@ -669,13 +938,15 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>${xml(productName)}</string>
 <key>CFBundleIdentifier</key><string>${xml(project.config.appId)}</string>
-<key>CFBundleName</key><string>${xml(productName)}</string>
+<key>CFBundleName</key><string>${xml(bundleName)}</string>
 <key>CFBundleDisplayName</key><string>${xml(productName)}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${xml(version)}</string>
 <key>CFBundleVersion</key><string>${xml(bundleVersion)}</string>
-<key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>LSMinimumSystemVersion</key><string>${xml(config.minimumSystemVersion)}</string>
 <key>NSHighResolutionCapable</key><true/>
+${categoryEntry}
+${copyrightEntry}
 ${iconEntry}
 </dict></plist>`;
     const plistPath = path.join(contents, 'Info.plist');
@@ -689,19 +960,13 @@ ${iconEntry}
 
     if (hasMacCodeSigningTool()) {
       const signingEnvironment = { ...process.env, COPYFILE_DISABLE: '1' };
-      await run('/usr/bin/codesign', ['--force', '--sign', '-', nativeHost], { env: signingEnvironment });
-      await run('/usr/bin/codesign', ['--force', '--sign', '-', mainExecutable], { env: signingEnvironment });
-
-      // Signing nested Mach-O files on non-APFS volumes can create fresh `._*`
-      // sidecars. They must not be present when the outer bundle is sealed.
+      await run('/usr/bin/codesign', codesignArguments(project, nativeHost), { env: signingEnvironment });
+      await run('/usr/bin/codesign', codesignArguments(project, mainExecutable), { env: signingEnvironment });
       await sanitizeMacBundle(appBundle);
-      await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appBundle], { env: signingEnvironment });
+      await run('/usr/bin/codesign', codesignArguments(project, appBundle, true), { env: signingEnvironment });
       await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', appBundle], { env: signingEnvironment });
     }
 
-    // Assemble and sign on the local temporary filesystem, then copy the sealed
-    // bundle to the project output. This avoids AppleDouble metadata generated by
-    // external/exFAT project drives such as /Volumes/... during codesign.
     await fse.remove(finalAppBundle);
     await fse.copy(appBundle, finalAppBundle);
     await fs.promises.chmod(path.join(finalAppBundle, 'Contents', 'MacOS', productName), 0o755);
@@ -714,35 +979,44 @@ ${iconEntry}
       });
     }
 
-    const zipPath = path.join(buildRoot, `${productName}-macos.zip`);
+    const artifactBase = renderArtifactBase(project, 'macos');
+    const zipPath = path.join(buildRoot, `${artifactBase}.zip`);
     if (commandExists('ditto', ['-h'])) {
       await run('ditto', ['--norsrc', '-c', '-k', '--keepParent', finalAppBundle, zipPath], {
         env: { ...process.env, COPYFILE_DISABLE: '1' }
       });
     } else {
-      await archiveDirectory(finalAppBundle, zipPath, 'zip', `${productName}.app`);
+      await archiveDirectory(finalAppBundle, zipPath, 'zip', `${bundleName}.app`);
     }
     outputs.push(zipPath);
 
-    if (commandExists('/usr/bin/hdiutil', ['help'])) {
-      const dmgPath = path.join(buildRoot, `${productName}.dmg`);
-      const temporaryDmgPath = path.join(bundleStageRoot, `${productName}.dmg`);
+    if (config.dmg.enabled && commandExists('/usr/bin/hdiutil', ['help'])) {
+      const dmgBase = renderArtifactBase(project, 'macos', config.dmg.artifactName || `${artifactBase}-installer`);
+      const dmgPath = path.join(buildRoot, `${dmgBase}.dmg`);
+      const temporaryDmgPath = path.join(bundleStageRoot, `${dmgBase}.dmg`);
+      const dmgRoot = path.join(bundleStageRoot, 'dmg-root');
 
       try {
-        // hdiutil can reject both source and output paths located on external,
-        // removable, network, or non-APFS volumes. Create the image entirely on
-        // the local temporary filesystem, then copy the finished DMG to build/.
+        await fse.remove(dmgRoot);
+        await fse.ensureDir(dmgRoot);
+        await fse.copy(appBundle, path.join(dmgRoot, `${bundleName}.app`));
+        await fs.promises.symlink('/Applications', path.join(dmgRoot, 'Applications'));
+        if (config.dmg.background) {
+          const background = resolveProjectAsset(project, config.dmg.background);
+          const backgroundDirectory = path.join(dmgRoot, '.background');
+          await fse.ensureDir(backgroundDirectory);
+          await fse.copy(background, path.join(backgroundDirectory, path.basename(background)));
+        }
+        await sanitizeMacBundle(dmgRoot);
         await fse.remove(temporaryDmgPath);
         await run('/usr/bin/hdiutil', [
           'create',
-          '-volname', productName,
-          '-srcfolder', appBundle,
+          '-volname', config.dmg.volumeName,
+          '-srcfolder', dmgRoot,
           '-ov',
           '-format', 'UDZO',
           temporaryDmgPath
-        ], {
-          env: { ...process.env, COPYFILE_DISABLE: '1' }
-        });
+        ], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
 
         await fse.remove(dmgPath);
         await fs.promises.copyFile(temporaryDmgPath, dmgPath);
@@ -750,7 +1024,6 @@ ${iconEntry}
       } catch (error) {
         await fse.remove(temporaryDmgPath);
         await fse.remove(dmgPath);
-
         if (process.env.ATOM_REQUIRE_DMG === '1') throw error;
         console.warn(`AtomJS could not create the optional macOS DMG; the signed .app and ZIP are still valid. ${error.message}`);
       }
@@ -764,38 +1037,221 @@ ${iconEntry}
 
 async function packageLinux({ project, buildRoot, unpacked, executableName, productName }) {
   const outputs = [];
-  const tarPath = path.join(buildRoot, `${productName}-linux.tar.gz`);
-  await archiveDirectory(unpacked, tarPath, 'tar');
+  const config = project.config.build.linux;
+  const artifactBase = renderArtifactBase(project, 'linux');
+  const binaryName = sanitizeFilename(config.binaryName).replace(/\s+/g, '-');
+  const packageName = String(config.packageName).toLowerCase().replace(/[^a-z0-9+.-]+/g, '-') || 'atomjs-app';
+  const sourceExecutable = path.join(unpacked, executableName);
+
+  const portableBinary = path.join(buildRoot, binaryName);
+  await fse.copy(sourceExecutable, portableBinary);
+  await fs.promises.chmod(portableBinary, 0o755);
+  outputs.push(portableBinary);
+
+  const tarPath = path.join(buildRoot, `${artifactBase}-portable.tar.gz`);
+  await archiveDirectory(unpacked, tarPath, 'tar', productName);
   outputs.push(tarPath);
 
   const appDir = path.join(buildRoot, `${productName}.AppDir`);
   const usrBin = path.join(appDir, 'usr', 'bin');
-  const usrLibApp = path.join(appDir, 'usr', 'lib', sanitizeFilename(project.packageJson.name || productName));
+  const applicationsDir = path.join(appDir, 'usr', 'share', 'applications');
+  const iconsDir = path.join(appDir, 'usr', 'share', 'icons', 'hicolor', '512x512', 'apps');
+  const docsDir = path.join(appDir, 'usr', 'share', 'doc', packageName);
+  await fse.remove(appDir);
   await fse.ensureDir(usrBin);
-  await fse.ensureDir(usrLibApp);
-  await fse.copy(path.join(unpacked, executableName), path.join(usrBin, productName));
-  await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(usrLibApp, 'ATOMJS-CREDIT.txt'));
+  await fse.ensureDir(applicationsDir);
+  await fse.ensureDir(docsDir);
+  await fse.copy(sourceExecutable, path.join(usrBin, binaryName));
+  await fs.promises.chmod(path.join(usrBin, binaryName), 0o755);
+  await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(docsDir, 'ATOMJS-CREDIT.txt'));
 
-  const appRun = `#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/${productName}" "$@"\n`;
+  const appRun = `#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/${binaryName}" "$@"\n`;
   await fs.promises.writeFile(path.join(appDir, 'AppRun'), appRun, { mode: 0o755 });
-  const desktopName = sanitizeFilename(project.packageJson.name || productName).toLowerCase().replace(/\s+/g, '-');
-  const desktop = `[Desktop Entry]\nType=Application\nName=${productName}\nExec=${productName}\nIcon=${desktopName}\nCategories=Development;Utility;\nTerminal=false\n`;
-  await fs.promises.writeFile(path.join(appDir, `${desktopName}.desktop`), desktop, 'utf8');
+  const desktop = `[Desktop Entry]\nType=Application\nName=${productName}\nComment=${config.description}\nExec=${binaryName}\nIcon=${packageName}\nCategories=${config.category};\nTerminal=false\nStartupNotify=true\n`;
+  await fs.promises.writeFile(path.join(applicationsDir, `${packageName}.desktop`), desktop, 'utf8');
+  await fse.copy(path.join(applicationsDir, `${packageName}.desktop`), path.join(appDir, `${packageName}.desktop`));
 
-  const iconSource = project.config.icon ? path.resolve(project.root, project.config.icon) : null;
-  if (iconSource && fs.existsSync(iconSource)) {
-    await fse.copy(iconSource, path.join(appDir, `${desktopName}.png`));
+  const iconSource = config.icon ? resolveProjectAsset(project, config.icon) : null;
+  if (iconSource) {
+    if (path.extname(iconSource).toLowerCase() !== '.png') {
+      throw new Error(`AtomJS Linux icons must be PNG files: ${iconSource}`);
+    }
+    await fse.ensureDir(iconsDir);
+    await fse.copy(iconSource, path.join(iconsDir, `${packageName}.png`));
+    await fse.copy(iconSource, path.join(appDir, `${packageName}.png`));
   }
 
-  const tool = findAppImageTool();
-  if (tool) {
-    const appImagePath = path.join(buildRoot, `${productName}.AppImage`);
-    await run(tool, [appDir, appImagePath], { env: { ...process.env, ARCH: process.arch === 'arm64' ? 'aarch64' : 'x86_64' } });
-    outputs.push(appImagePath);
-  } else {
-    console.warn('appimagetool was not found; AppDir was created but AppImage generation was skipped.');
+  if (config.appImage) {
+    const tool = findAppImageTool();
+    if (tool) {
+      const appImagePath = path.join(buildRoot, `${artifactBase}.AppImage`);
+      await run(tool, [appDir, appImagePath], {
+        env: { ...process.env, ARCH: process.arch === 'arm64' ? 'aarch64' : 'x86_64' }
+      });
+      outputs.push(appImagePath);
+    } else {
+      console.warn('appimagetool was not found; the portable binary, AppDir and .deb are still available.');
+    }
   }
+
+  if (config.deb) {
+    const debStage = path.join(buildRoot, '.deb-stage');
+    const controlRoot = path.join(debStage, 'control');
+    const dataRoot = path.join(debStage, 'data');
+    await fse.remove(debStage);
+    await fse.ensureDir(controlRoot);
+    await fse.ensureDir(path.join(dataRoot, 'usr', 'bin'));
+    await fse.ensureDir(path.join(dataRoot, 'usr', 'share', 'applications'));
+    await fse.ensureDir(path.join(dataRoot, 'usr', 'share', 'doc', packageName));
+
+    await fse.copy(sourceExecutable, path.join(dataRoot, 'usr', 'bin', binaryName));
+    await fs.promises.chmod(path.join(dataRoot, 'usr', 'bin', binaryName), 0o755);
+    await fse.copy(
+      path.join(applicationsDir, `${packageName}.desktop`),
+      path.join(dataRoot, 'usr', 'share', 'applications', `${packageName}.desktop`)
+    );
+    await fse.copy(
+      path.join(unpacked, 'ATOMJS-CREDIT.txt'),
+      path.join(dataRoot, 'usr', 'share', 'doc', packageName, 'ATOMJS-CREDIT.txt')
+    );
+    if (iconSource) {
+      const debIconDir = path.join(dataRoot, 'usr', 'share', 'icons', 'hicolor', '512x512', 'apps');
+      await fse.ensureDir(debIconDir);
+      await fse.copy(iconSource, path.join(debIconDir, `${packageName}.png`));
+    }
+
+    const dependencies = config.dependencies.length > 0 ? `\nDepends: ${config.dependencies.join(', ')}` : '';
+    const control = [
+      `Package: ${packageName}`,
+      `Version: ${normalizeDebVersion(project.packageJson.version)}`,
+      'Section: utils',
+      'Priority: optional',
+      `Architecture: ${debArchitecture()}`,
+      `Maintainer: ${config.maintainer || packageAuthor(project)}`,
+      `Description: ${String(config.description).replace(/\r?\n/g, '\n ')}`
+    ].join('\n') + dependencies + '\n';
+    await fs.promises.writeFile(path.join(controlRoot, 'control'), control, 'utf8');
+
+    const controlTar = path.join(debStage, 'control.tar.gz');
+    const dataTar = path.join(debStage, 'data.tar.gz');
+    await archiveDirectory(controlRoot, controlTar, 'tar');
+    await archiveDirectory(dataRoot, dataTar, 'tar');
+    const debPath = path.join(buildRoot, `${artifactBase}.deb`);
+    await writeArArchive(debPath, [
+      { name: 'debian-binary', data: Buffer.from('2.0\n') },
+      { name: 'control.tar.gz', data: await fs.promises.readFile(controlTar) },
+      { name: 'data.tar.gz', data: await fs.promises.readFile(dataTar) }
+    ]);
+    outputs.push(debPath);
+    await fse.remove(debStage);
+  }
+
+  if (config.rpm) {
+    if (commandExists('rpmbuild', ['--version'])) {
+      const rpmStage = path.join(buildRoot, '.rpm-stage');
+      const rpmTop = path.join(rpmStage, 'rpmbuild');
+      const rpmSourceRoot = path.join(rpmStage, 'payload');
+      const rpmSpecPath = path.join(rpmTop, 'SPECS', `${packageName}.spec`);
+      const rpmSourcePath = path.join(rpmTop, 'SOURCES', `${packageName}-payload.tar.gz`);
+      const rpmBinaryPath = path.join(rpmSourceRoot, 'usr', 'bin', binaryName);
+      const rpmDesktopPath = path.join(rpmSourceRoot, 'usr', 'share', 'applications', `${packageName}.desktop`);
+      const rpmDocsPath = path.join(rpmSourceRoot, 'usr', 'share', 'doc', packageName, 'ATOMJS-CREDIT.txt');
+
+      await fse.remove(rpmStage);
+      for (const directory of ['BUILD', 'BUILDROOT', 'RPMS', 'SOURCES', 'SPECS', 'SRPMS']) {
+        await fse.ensureDir(path.join(rpmTop, directory));
+      }
+      await fse.ensureDir(path.dirname(rpmBinaryPath));
+      await fse.ensureDir(path.dirname(rpmDesktopPath));
+      await fse.ensureDir(path.dirname(rpmDocsPath));
+      await fse.copy(sourceExecutable, rpmBinaryPath);
+      await fs.promises.chmod(rpmBinaryPath, 0o755);
+      await fse.copy(path.join(applicationsDir, `${packageName}.desktop`), rpmDesktopPath);
+      await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), rpmDocsPath);
+
+      const rpmFiles = [
+        `/usr/bin/${binaryName}`,
+        `/usr/share/applications/${packageName}.desktop`,
+        `/usr/share/doc/${packageName}/ATOMJS-CREDIT.txt`
+      ];
+      if (iconSource) {
+        const rpmIconPath = path.join(rpmSourceRoot, 'usr', 'share', 'icons', 'hicolor', '512x512', 'apps', `${packageName}.png`);
+        await fse.ensureDir(path.dirname(rpmIconPath));
+        await fse.copy(iconSource, rpmIconPath);
+        rpmFiles.push(`/usr/share/icons/hicolor/512x512/apps/${packageName}.png`);
+      }
+
+      await archiveDirectory(rpmSourceRoot, rpmSourcePath, 'tar');
+      const rpmRequires = config.rpmDependencies.length > 0
+        ? `Requires: ${config.rpmDependencies.join(', ')}`
+        : '';
+      const rpmSpec = [
+        `Name: ${packageName}`,
+        `Version: ${normalizeRpmVersion(project.packageJson.version)}`,
+        'Release: 1%{?dist}',
+        `Summary: ${rpmText(config.description || productName)}`,
+        `License: ${rpmText(project.packageJson.license || 'Proprietary')}`,
+        `BuildArch: ${rpmArchitecture()}`,
+        'Source0: ' + path.basename(rpmSourcePath),
+        'AutoReqProv: no',
+        rpmRequires,
+        '',
+        '%description',
+        rpmText(config.description || productName),
+        '',
+        '%prep',
+        '',
+        '%build',
+        '',
+        '%install',
+        'rm -rf %{buildroot}',
+        'mkdir -p %{buildroot}',
+        'tar -xzf %{SOURCE0} -C %{buildroot}',
+        '',
+        '%files',
+        ...rpmFiles,
+        ''
+      ].filter((line, index, lines) => line !== '' || lines[index - 1] !== '').join('\n');
+      await fs.promises.writeFile(rpmSpecPath, rpmSpec, 'utf8');
+
+      await run('rpmbuild', ['--define', `_topdir ${rpmTop}`, '-bb', rpmSpecPath]);
+      const rpmCandidates = [];
+      async function findRpmFiles(directory) {
+        for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
+          const absolute = path.join(directory, entry.name);
+          if (entry.isDirectory()) await findRpmFiles(absolute);
+          else if (entry.isFile() && entry.name.endsWith('.rpm')) rpmCandidates.push(absolute);
+        }
+      }
+      await findRpmFiles(path.join(rpmTop, 'RPMS'));
+      if (rpmCandidates.length === 0) throw new Error('rpmbuild completed without producing an RPM package.');
+      const rpmPath = path.join(buildRoot, `${artifactBase}.rpm`);
+      await fse.copy(rpmCandidates[0], rpmPath);
+      outputs.push(rpmPath);
+      await fse.remove(rpmStage);
+    } else {
+      console.warn('rpmbuild was not found; the portable binary, AppImage and .deb remain available.');
+    }
+  }
+
+  const distro = detectLinuxDistribution();
+  if (distro) console.log(`Linux packaging host: ${distro}`);
   return outputs;
+}
+
+function detectLinuxDistribution() {
+  if (process.platform !== 'linux' || !fs.existsSync('/etc/os-release')) return null;
+  try {
+    const values = {};
+    for (const line of fs.readFileSync('/etc/os-release', 'utf8').split(/\r?\n/)) {
+      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      if (!match) continue;
+      values[match[1]] = match[2].replace(/^"|"$/g, '');
+    }
+    return values.PRETTY_NAME || values.NAME || values.ID || null;
+  } catch {
+    return null;
+  }
 }
 
 function findAppImageTool() {
@@ -912,4 +1368,4 @@ function xml(value) {
   return String(value).replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]);
 }
 
-module.exports = { buildCommand, localBuild, createApplicationPayload, readPortableExecutableLayout, removeMacMetadataFiles };
+module.exports = { buildCommand, localBuild, createApplicationPayload, readPortableExecutableLayout, removeMacMetadataFiles, writeArArchive, normalizeDebVersion, normalizeRpmVersion };

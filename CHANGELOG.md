@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2-alpha.0
+
+- Fixed Windows PE signature validation after SEA preparation.
+- Added strict PE optional-header bounds checks before signature removal and GUI subsystem updates.
+- Added a regression test that parses a synthetic PE32+ executable.
+- Updated generated projects and build manifests to the current AtomJS release.
+
 ## 0.4.1-alpha.0
 
 - Windows release executables now use the GUI subsystem, so launching a built app no longer opens a Command Prompt window.

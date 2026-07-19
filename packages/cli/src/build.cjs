@@ -106,7 +106,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.3.0-alpha.0',
+      atomjsVersion: '0.4.2-alpha.0',
       target,
       productName,
       appId: project.config.appId,
@@ -367,19 +367,32 @@ function readPortableExecutableLayout(image) {
   }
 
   const peOffset = image.readUInt32LE(0x3c);
-  if (peOffset < 0x40 || peOffset + 0x100 > image.length || image.toString('ascii', peOffset, peOffset + 4) !== 'PE\\0\\0') {
+  const coffHeaderSize = 24;
+  if (peOffset < 0x40 || peOffset + coffHeaderSize > image.length || image.readUInt32LE(peOffset) !== 0x00004550) {
     throw new Error('AtomJS expected a Windows PE executable but the PE header is invalid.');
   }
 
-  const optionalHeaderOffset = peOffset + 24;
+  const optionalHeaderSize = image.readUInt16LE(peOffset + 20);
+  const optionalHeaderOffset = peOffset + coffHeaderSize;
+  const optionalHeaderEnd = optionalHeaderOffset + optionalHeaderSize;
+  if (optionalHeaderSize < 2 || optionalHeaderEnd > image.length) {
+    throw new Error('AtomJS expected a complete Windows PE optional header.');
+  }
+
   const magic = image.readUInt16LE(optionalHeaderOffset);
   if (magic !== 0x10b && magic !== 0x20b) {
     throw new Error(`AtomJS does not support Windows PE optional-header magic 0x${magic.toString(16)}.`);
   }
 
+  const dataDirectoryOffset = optionalHeaderOffset + (magic === 0x20b ? 112 : 96);
+  const certificateDirectoryEnd = dataDirectoryOffset + (8 * 5);
+  if (certificateDirectoryEnd > optionalHeaderEnd) {
+    throw new Error('AtomJS expected the Windows PE certificate data directory.');
+  }
+
   return {
     optionalHeaderOffset,
-    dataDirectoryOffset: optionalHeaderOffset + (magic === 0x20b ? 112 : 96)
+    dataDirectoryOffset
   };
 }
 
@@ -783,4 +796,4 @@ function xml(value) {
   return String(value).replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]);
 }
 
-module.exports = { buildCommand, localBuild, createApplicationPayload };
+module.exports = { buildCommand, localBuild, createApplicationPayload, readPortableExecutableLayout };

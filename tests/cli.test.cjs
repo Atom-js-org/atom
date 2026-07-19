@@ -87,3 +87,21 @@ test('Windows release packaging uses a GUI PE executable and official WebView2 d
   assert.match(doctorSource, /Get-ItemPropertyValue[^\n]+-Name 'pv'/);
   assert.doesNotMatch(doctorSource, /F1E7E4A4-BD05-43A5-BCC0-B7F5E0E9D7F5/);
 });
+
+test('Windows PE parser accepts a real PE signature without escaped-text confusion', () => {
+  const { readPortableExecutableLayout } = require('../packages/cli/src/build.cjs');
+  const image = Buffer.alloc(0x200);
+  image.write('MZ', 0, 'ascii');
+  image.writeUInt32LE(0x80, 0x3c);
+  image.writeUInt32LE(0x00004550, 0x80);
+  image.writeUInt16LE(0x00f0, 0x80 + 20);
+  image.writeUInt16LE(0x020b, 0x80 + 24);
+
+  assert.deepEqual(readPortableExecutableLayout(image), {
+    optionalHeaderOffset: 0x80 + 24,
+    dataDirectoryOffset: 0x80 + 24 + 112
+  });
+
+  image.writeUInt32LE(0x00584550, 0x80);
+  assert.throws(() => readPortableExecutableLayout(image), /PE header is invalid/);
+});

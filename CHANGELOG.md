@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5-alpha.0
+
+- Creates macOS DMG images entirely on the local temporary filesystem before copying them to the project output.
+- Prevents `hdiutil: create failed - Operation not permitted` when projects are built from external, removable, network, or non-APFS volumes.
+- Treats DMG creation as optional by default so a valid signed `.app` and ZIP are not discarded when `hdiutil` fails; set `ATOM_REQUIRE_DMG=1` to require a DMG.
+
 ## 0.4.4-alpha.0
 
 - Build and sign macOS application bundles on local temporary storage before copying them to the project output.

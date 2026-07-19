@@ -178,3 +178,13 @@ test('macOS bundle is signed on local staging storage and archived without resou
   assert.match(buildSource, /ditto', \['--norsrc', '-c', '-k', '--keepParent'/);
   assert.doesNotMatch(buildSource, /--sequesterRsrc/);
 });
+
+test('macOS DMG is created on local staging storage and copied to the output', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+
+  assert.match(buildSource, /temporaryDmgPath = path\.join\(bundleStageRoot, `\$\{productName\}\.dmg`\)/);
+  assert.match(buildSource, /'-srcfolder', appBundle/);
+  assert.match(buildSource, /fs\.promises\.copyFile\(temporaryDmgPath, dmgPath\)/);
+  assert.match(buildSource, /ATOM_REQUIRE_DMG === '1'/);
+  assert.doesNotMatch(buildSource, /'-srcfolder', finalAppBundle/);
+});

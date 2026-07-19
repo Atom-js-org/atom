@@ -107,7 +107,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.4.4-alpha.0',
+      atomjsVersion: '0.4.5-alpha.0',
       target,
       productName,
       appId: project.config.appId,
@@ -724,12 +724,36 @@ ${iconEntry}
     }
     outputs.push(zipPath);
 
-    if (commandExists('hdiutil', ['help'])) {
+    if (commandExists('/usr/bin/hdiutil', ['help'])) {
       const dmgPath = path.join(buildRoot, `${productName}.dmg`);
-      await run('hdiutil', ['create', '-volname', productName, '-srcfolder', finalAppBundle, '-ov', '-format', 'UDZO', dmgPath], {
-        env: { ...process.env, COPYFILE_DISABLE: '1' }
-      });
-      outputs.push(dmgPath);
+      const temporaryDmgPath = path.join(bundleStageRoot, `${productName}.dmg`);
+
+      try {
+        // hdiutil can reject both source and output paths located on external,
+        // removable, network, or non-APFS volumes. Create the image entirely on
+        // the local temporary filesystem, then copy the finished DMG to build/.
+        await fse.remove(temporaryDmgPath);
+        await run('/usr/bin/hdiutil', [
+          'create',
+          '-volname', productName,
+          '-srcfolder', appBundle,
+          '-ov',
+          '-format', 'UDZO',
+          temporaryDmgPath
+        ], {
+          env: { ...process.env, COPYFILE_DISABLE: '1' }
+        });
+
+        await fse.remove(dmgPath);
+        await fs.promises.copyFile(temporaryDmgPath, dmgPath);
+        outputs.push(dmgPath);
+      } catch (error) {
+        await fse.remove(temporaryDmgPath);
+        await fse.remove(dmgPath);
+
+        if (process.env.ATOM_REQUIRE_DMG === '1') throw error;
+        console.warn(`AtomJS could not create the optional macOS DMG; the signed .app and ZIP are still valid. ${error.message}`);
+      }
     }
 
     return { outputs, appBundle: finalAppBundle };

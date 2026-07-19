@@ -107,7 +107,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.4.3-alpha.0',
+      atomjsVersion: '0.4.4-alpha.0',
       target,
       productName,
       appId: project.config.appId,
@@ -570,50 +570,101 @@ function hasMacCodeSigningTool() {
   return process.platform === 'darwin' && fs.existsSync('/usr/bin/codesign');
 }
 
+async function removeMacMetadataFiles(root) {
+  const removed = [];
+  if (!root || !fs.existsSync(root)) return removed;
+
+  async function visit(directory) {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      const isMetadata = entry.name === '.DS_Store'
+        || entry.name === '__MACOSX'
+        || entry.name.startsWith('._');
+
+      if (isMetadata) {
+        await fs.promises.rm(absolute, { recursive: true, force: true });
+        removed.push(absolute);
+        continue;
+      }
+
+      if (entry.isDirectory()) await visit(absolute);
+    }
+  }
+
+  await visit(root);
+  return removed;
+}
+
+async function sanitizeMacBundle(appBundle) {
+  await removeMacMetadataFiles(appBundle);
+
+  if (process.platform === 'darwin' && fs.existsSync('/usr/bin/xattr')) {
+    const result = spawnSync('/usr/bin/xattr', ['-cr', appBundle], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (result.error) {
+      console.warn(`AtomJS could not clear macOS extended attributes: ${result.error.message}`);
+    } else if (result.status !== 0) {
+      const detail = String(result.stderr || result.stdout || '').trim();
+      if (detail) console.warn(`AtomJS could not clear every macOS extended attribute: ${detail}`);
+    }
+  }
+
+  // Filesystems such as exFAT can materialize extended attributes as AppleDouble
+  // sidecars while xattr is running, so remove metadata once more afterwards.
+  await removeMacMetadataFiles(appBundle);
+}
+
 async function packageMacOS({ project, buildRoot, unpacked, executableName, productName, hostSource }) {
   const outputs = [];
-  const appBundle = path.join(buildRoot, `${productName}.app`);
+  const finalAppBundle = path.join(buildRoot, `${productName}.app`);
+  const stageBase = await resolveShortStageBase();
+  const bundleStageRoot = await fs.promises.mkdtemp(path.join(stageBase, 'macos-app-'));
+  const appBundle = path.join(bundleStageRoot, `${productName}.app`);
   const contents = path.join(appBundle, 'Contents');
   const macosDir = path.join(contents, 'MacOS');
   const resources = path.join(contents, 'Resources');
   const mainExecutable = path.join(macosDir, productName);
   const nativeHost = path.join(macosDir, 'AtomJSWindowHost');
 
-  await fse.ensureDir(macosDir);
-  await fse.ensureDir(resources);
-  await fse.copy(path.join(unpacked, executableName), mainExecutable);
-  await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(resources, 'ATOMJS-CREDIT.txt'));
-  await fs.promises.chmod(mainExecutable, 0o755);
+  try {
+    await fse.ensureDir(macosDir);
+    await fse.ensureDir(resources);
+    await fse.copy(path.join(unpacked, executableName), mainExecutable);
+    await fse.copy(path.join(unpacked, 'ATOMJS-CREDIT.txt'), path.join(resources, 'ATOMJS-CREDIT.txt'));
+    await fs.promises.chmod(mainExecutable, 0o755);
 
-  if (!fs.existsSync(hostSource)) {
-    throw new Error(`AtomJS macOS native host source was not found: ${hostSource}`);
-  }
-  if (!commandExists('/usr/bin/xcrun', ['--version'])) {
-    throw new Error('macOS builds require the Xcode Command Line Tools. Run `xcode-select --install`.');
-  }
+    if (!fs.existsSync(hostSource)) {
+      throw new Error(`AtomJS macOS native host source was not found: ${hostSource}`);
+    }
+    if (!commandExists('/usr/bin/xcrun', ['--version'])) {
+      throw new Error('macOS builds require the Xcode Command Line Tools. Run `xcode-select --install`.');
+    }
 
-  await run('/usr/bin/xcrun', [
-    'clang',
-    '-fobjc-arc',
-    '-fmodules',
-    '-mmacosx-version-min=12.0',
-    '-framework', 'Cocoa',
-    '-framework', 'WebKit',
-    hostSource,
-    '-o', nativeHost
-  ]);
-  await fs.promises.chmod(nativeHost, 0o755);
+    await run('/usr/bin/xcrun', [
+      'clang',
+      '-fobjc-arc',
+      '-fmodules',
+      '-mmacosx-version-min=12.0',
+      '-framework', 'Cocoa',
+      '-framework', 'WebKit',
+      hostSource,
+      '-o', nativeHost
+    ]);
+    await fs.promises.chmod(nativeHost, 0o755);
 
-  let iconEntry = '';
-  const iconSource = project.config.icon ? path.resolve(project.root, project.config.icon) : null;
-  if (iconSource && fs.existsSync(iconSource) && path.extname(iconSource).toLowerCase() === '.icns') {
-    await fse.copy(iconSource, path.join(resources, 'AppIcon.icns'));
-    iconEntry = '<key>CFBundleIconFile</key><string>AppIcon</string>';
-  }
+    let iconEntry = '';
+    const iconSource = project.config.icon ? path.resolve(project.root, project.config.icon) : null;
+    if (iconSource && fs.existsSync(iconSource) && path.extname(iconSource).toLowerCase() === '.icns') {
+      await fse.copy(iconSource, path.join(resources, 'AppIcon.icns'));
+      iconEntry = '<key>CFBundleIconFile</key><string>AppIcon</string>';
+    }
 
-  const version = String(project.packageJson.version || '0.0.0');
-  const bundleVersion = (version.match(/\d+/g) || ['1']).slice(0, 3).join('.');
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+    const version = String(project.packageJson.version || '0.0.0');
+    const bundleVersion = (version.match(/\d+/g) || ['1']).slice(0, 3).join('.');
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>${xml(productName)}</string>
@@ -627,35 +678,64 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
 <key>NSHighResolutionCapable</key><true/>
 ${iconEntry}
 </dict></plist>`;
-  const plistPath = path.join(contents, 'Info.plist');
-  await fs.promises.writeFile(plistPath, plist, 'utf8');
+    const plistPath = path.join(contents, 'Info.plist');
+    await fs.promises.writeFile(plistPath, plist, 'utf8');
 
-  if (commandExists('/usr/bin/plutil', ['-help'])) {
-    await run('/usr/bin/plutil', ['-lint', plistPath]);
+    if (commandExists('/usr/bin/plutil', ['-help'])) {
+      await run('/usr/bin/plutil', ['-lint', plistPath]);
+    }
+
+    await sanitizeMacBundle(appBundle);
+
+    if (hasMacCodeSigningTool()) {
+      const signingEnvironment = { ...process.env, COPYFILE_DISABLE: '1' };
+      await run('/usr/bin/codesign', ['--force', '--sign', '-', nativeHost], { env: signingEnvironment });
+      await run('/usr/bin/codesign', ['--force', '--sign', '-', mainExecutable], { env: signingEnvironment });
+
+      // Signing nested Mach-O files on non-APFS volumes can create fresh `._*`
+      // sidecars. They must not be present when the outer bundle is sealed.
+      await sanitizeMacBundle(appBundle);
+      await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appBundle], { env: signingEnvironment });
+      await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', appBundle], { env: signingEnvironment });
+    }
+
+    // Assemble and sign on the local temporary filesystem, then copy the sealed
+    // bundle to the project output. This avoids AppleDouble metadata generated by
+    // external/exFAT project drives such as /Volumes/... during codesign.
+    await fse.remove(finalAppBundle);
+    await fse.copy(appBundle, finalAppBundle);
+    await fs.promises.chmod(path.join(finalAppBundle, 'Contents', 'MacOS', productName), 0o755);
+    await fs.promises.chmod(path.join(finalAppBundle, 'Contents', 'MacOS', 'AtomJSWindowHost'), 0o755);
+    await sanitizeMacBundle(finalAppBundle);
+
+    if (hasMacCodeSigningTool()) {
+      await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', finalAppBundle], {
+        env: { ...process.env, COPYFILE_DISABLE: '1' }
+      });
+    }
+
+    const zipPath = path.join(buildRoot, `${productName}-macos.zip`);
+    if (commandExists('ditto', ['-h'])) {
+      await run('ditto', ['--norsrc', '-c', '-k', '--keepParent', finalAppBundle, zipPath], {
+        env: { ...process.env, COPYFILE_DISABLE: '1' }
+      });
+    } else {
+      await archiveDirectory(finalAppBundle, zipPath, 'zip', `${productName}.app`);
+    }
+    outputs.push(zipPath);
+
+    if (commandExists('hdiutil', ['help'])) {
+      const dmgPath = path.join(buildRoot, `${productName}.dmg`);
+      await run('hdiutil', ['create', '-volname', productName, '-srcfolder', finalAppBundle, '-ov', '-format', 'UDZO', dmgPath], {
+        env: { ...process.env, COPYFILE_DISABLE: '1' }
+      });
+      outputs.push(dmgPath);
+    }
+
+    return { outputs, appBundle: finalAppBundle };
+  } finally {
+    await fse.remove(bundleStageRoot);
   }
-
-  if (hasMacCodeSigningTool()) {
-    await run('/usr/bin/codesign', ['--force', '--sign', '-', nativeHost]);
-    await run('/usr/bin/codesign', ['--force', '--sign', '-', mainExecutable]);
-    await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appBundle]);
-    await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appBundle]);
-  }
-
-  const zipPath = path.join(buildRoot, `${productName}-macos.zip`);
-  if (commandExists('ditto', ['-h'])) {
-    await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appBundle, zipPath]);
-  } else {
-    await archiveDirectory(appBundle, zipPath, 'zip', `${productName}.app`);
-  }
-  outputs.push(zipPath);
-
-  if (commandExists('hdiutil', ['help'])) {
-    const dmgPath = path.join(buildRoot, `${productName}.dmg`);
-    await run('hdiutil', ['create', '-volname', productName, '-srcfolder', appBundle, '-ov', '-format', 'UDZO', dmgPath]);
-    outputs.push(dmgPath);
-  }
-
-  return { outputs, appBundle };
 }
 
 async function packageLinux({ project, buildRoot, unpacked, executableName, productName }) {
@@ -808,4 +888,4 @@ function xml(value) {
   return String(value).replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]);
 }
 
-module.exports = { buildCommand, localBuild, createApplicationPayload, readPortableExecutableLayout };
+module.exports = { buildCommand, localBuild, createApplicationPayload, readPortableExecutableLayout, removeMacMetadataFiles };

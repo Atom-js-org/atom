@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.4-alpha.0
+
+- Build and sign macOS application bundles on local temporary storage before copying them to the project output.
+- Remove AppleDouble (`._*`), `.DS_Store`, `__MACOSX`, and extended-attribute metadata before code signing.
+- Archive macOS releases with `ditto --norsrc` to prevent resource-fork sidecars in ZIP files.
+- Fix code-signing failures for projects stored on exFAT and other external volumes.
+
 ## 0.4.3-alpha.0
 
 - Fixed macOS development windows by waiting for AppKit to finish launching before accepting native-host commands.

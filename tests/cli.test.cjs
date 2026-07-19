@@ -142,3 +142,39 @@ test('macOS build uses the system codesign executable instead of an unsupported 
   assert.match(doctorSource, /fs\.existsSync\('\/usr\/bin\/codesign'\)/);
   assert.doesNotMatch(doctorSource, /codesign[^\n]+--version/);
 });
+
+
+test('macOS packaging removes AppleDouble metadata before code signing', async () => {
+  const { removeMacMetadataFiles } = require('../packages/cli/src/build.cjs');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-macos-metadata-'));
+  const appBundle = path.join(tempRoot, 'Sample.app');
+  const contents = path.join(appBundle, 'Contents');
+  const resources = path.join(contents, 'Resources');
+
+  fs.mkdirSync(resources, { recursive: true });
+  fs.writeFileSync(path.join(contents, 'Info.plist'), '<plist/>');
+  fs.writeFileSync(path.join(contents, '._Info.plist'), 'apple-double');
+  fs.writeFileSync(path.join(resources, '.DS_Store'), 'finder');
+  fs.mkdirSync(path.join(resources, '__MACOSX'));
+  fs.writeFileSync(path.join(resources, '__MACOSX', 'metadata'), 'x');
+
+  const removed = await removeMacMetadataFiles(appBundle);
+
+  assert.ok(removed.some((entry) => entry.endsWith('._Info.plist')));
+  assert.equal(fs.existsSync(path.join(contents, '._Info.plist')), false);
+  assert.equal(fs.existsSync(path.join(resources, '.DS_Store')), false);
+  assert.equal(fs.existsSync(path.join(resources, '__MACOSX')), false);
+  assert.equal(fs.existsSync(path.join(contents, 'Info.plist')), true);
+
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test('macOS bundle is signed on local staging storage and archived without resource sidecars', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+
+  assert.match(buildSource, /mkdtemp\(path\.join\(stageBase, 'macos-app-'\)\)/);
+  assert.match(buildSource, /sanitizeMacBundle\(appBundle\)/);
+  assert.match(buildSource, /COPYFILE_DISABLE: '1'/);
+  assert.match(buildSource, /ditto', \['--norsrc', '-c', '-k', '--keepParent'/);
+  assert.doesNotMatch(buildSource, /--sequesterRsrc/);
+});

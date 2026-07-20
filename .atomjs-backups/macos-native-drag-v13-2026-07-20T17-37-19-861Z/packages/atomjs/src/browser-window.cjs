@@ -224,39 +224,6 @@ class BrowserWindow extends EventEmitter {
     return this._sendHostCommand({ command: 'start-drag' });
   }
 
-  _setNativeDragRegions(regions, viewport) {
-    if (this._destroyed) return false;
-
-    const normalizedRegions = [];
-    for (const region of Array.isArray(regions) ? regions.slice(0, 4096) : []) {
-      const x = Number(region && region.x);
-      const y = Number(region && region.y);
-      const width = Number(region && region.width);
-      const height = Number(region && region.height);
-      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
-      normalizedRegions.push({
-        x,
-        y,
-        width,
-        height,
-        draggable: region.draggable === true
-      });
-    }
-
-    const viewportWidth = Number(viewport && viewport.width);
-    const viewportHeight = Number(viewport && viewport.height);
-    const normalizedViewport = {
-      width: Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : this._bounds.width,
-      height: Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : this._bounds.height
-    };
-
-    return this._sendHostCommand({
-      command: 'set-drag-regions',
-      regions: normalizedRegions,
-      viewport: normalizedViewport
-    });
-  }
-
   _markRendererReady(details) {
     this._notifyDidFinishLoad(details && details.href ? details.href : this._currentUrl, 'bridge');
   }
@@ -276,16 +243,6 @@ class BrowserWindow extends EventEmitter {
     if (event.type === 'blur') {
       if (state.focusedWindowId === this.id) state.focusedWindowId = null;
       this.emit('blur');
-      return;
-    }
-    if (event.type === 'bounds-changed') {
-      const bounds = event.bounds && typeof event.bounds === 'object' ? event.bounds : {};
-      for (const key of ['x', 'y', 'width', 'height']) {
-        const value = Number(bounds[key]);
-        if (Number.isFinite(value)) this._bounds[key] = value;
-      }
-      if (event.reason === 'move') this.emit('move');
-      if (event.reason === 'resize') this.emit('resize');
       return;
     }
     if (event.type === 'minimize') {

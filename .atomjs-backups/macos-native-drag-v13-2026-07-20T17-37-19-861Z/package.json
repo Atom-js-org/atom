@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/monorepo",
-  "version": "0.5.3-alpha.0",
+  "version": "0.5.2-alpha.0",
   "private": true,
   "description": "Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.",
   "workspaces": [
@@ -11,8 +11,7 @@
     "doctor": "node packages/cli/bin/atom.cjs doctor",
     "test": "node --test tests/*.test.cjs",
     "verify:electron": "node scripts/verify-electron-compat.cjs",
-    "pack:dry": "npm pack ./packages/atomjs --dry-run && npm pack ./packages/electron-compat --dry-run && npm pack ./packages/cli --dry-run",
-    "sync:version": "node scripts/sync-workspace-version.cjs"
+    "pack:dry": "npm pack ./packages/atomjs --dry-run && npm pack ./packages/electron-compat --dry-run && npm pack ./packages/cli --dry-run"
   },
   "dependencies": {
     "@atom-js-org/runtime": "file:packages/atomjs",

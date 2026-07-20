@@ -57,8 +57,7 @@ function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
     const inline = normalizeAppRegion(
       element.style && (
         element.style.getPropertyValue('-webkit-app-region') ||
-        element.style.getPropertyValue('app-region') ||
-        element.style.getPropertyValue('--atom-app-region')
+        element.style.getPropertyValue('app-region')
       )
     );
     if (inline) return inline;
@@ -67,223 +66,40 @@ function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
       const computed = getComputedStyle(element);
       return normalizeAppRegion(
         computed.getPropertyValue('-webkit-app-region') ||
-        computed.getPropertyValue('app-region') ||
-        computed.getPropertyValue('--atom-app-region')
+        computed.getPropertyValue('app-region')
       );
     } catch {
       return '';
     }
   }
 
-  function collectStylesheetAppRegions() {
-    const regions = new Map();
-
-    function visitRules(rules) {
-      for (const rule of rules || []) {
-        if (rule && rule.cssRules) {
-          visitRules(rule.cssRules);
-          continue;
-        }
-        if (!rule || !rule.selectorText || !rule.style) continue;
-
-        const match = String(rule.cssText || '').match(
-          /(?:-webkit-app-region|app-region)\s*:\s*(drag|no-drag)/i
-        );
-        const region = normalizeAppRegion(
-          rule.style.getPropertyValue('-webkit-app-region') ||
-          rule.style.getPropertyValue('app-region') ||
-          rule.style.getPropertyValue('--atom-app-region') ||
-          (match && match[1])
-        );
-        if (!region) continue;
-
-        try {
-          for (const element of document.querySelectorAll(rule.selectorText)) {
-            regions.set(element, region);
-          }
-        } catch {}
-      }
-    }
-
-    for (const sheet of document.styleSheets || []) {
-      try {
-        visitRules(sheet.cssRules);
-      } catch {}
-    }
-
-    return regions;
-  }
-
-  function composedParent(element) {
-    if (!(element instanceof Element)) return null;
-    if (element.assignedSlot) return element.assignedSlot;
-    if (element.parentElement) return element.parentElement;
-    const root = element.getRootNode && element.getRootNode();
-    return root && root.host instanceof Element ? root.host : null;
-  }
-
-  function isInteractiveElement(element) {
-    return element instanceof Element && element.matches(
+  function isInteractiveDragTarget(element) {
+    return element instanceof Element && Boolean(element.closest(
       'button, input, textarea, select, option, a[href], [contenteditable=""], [contenteditable="true"], [role="button"]'
-    );
+    ));
   }
 
-  function hasDraggableAncestor(element) {
-    let current = composedParent(element);
-    while (current) {
-      const region = appRegionForElement(current);
+  function shouldStartWindowDrag(event) {
+    if (event.button !== 0 || event.defaultPrevented) return false;
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+    let draggable = false;
+
+    for (const entry of path) {
+      if (!(entry instanceof Element)) continue;
+      const region = appRegionForElement(entry);
       if (region === 'no-drag') return false;
-      if (region === 'drag') return true;
-      current = composedParent(current);
-    }
-    return false;
-  }
-
-  const observedDragRoots = new WeakSet();
-  let dragRegionObserver = null;
-  let dragRegionFrame = 0;
-  let lastDragRegionPayload = '';
-
-  function observeDragRoot(root) {
-    if (!dragRegionObserver || !root || observedDragRoots.has(root)) return;
-    observedDragRoots.add(root);
-    dragRegionObserver.observe(root, {
-      attributes: true,
-      childList: true,
-      subtree: true,
-      attributeFilter: [
-        'class',
-        'style',
-        'hidden',
-        'data-atom-drag-region',
-        'data-atom-no-drag',
-        'data-atom-app-region',
-        'data-app-region'
-      ]
-    });
-  }
-
-  function walkRegionElements(root, visitor) {
-    const stack = [];
-    if (root && root.documentElement instanceof Element) {
-      stack.push(root.documentElement);
-    } else if (root && root.children) {
-      for (let index = root.children.length - 1; index >= 0; index -= 1) {
-        stack.push(root.children[index]);
-      }
+      if (region === 'drag') draggable = true;
     }
 
-    while (stack.length > 0) {
-      const element = stack.pop();
-      if (!(element instanceof Element)) continue;
-      visitor(element);
-
-      if (element.shadowRoot) {
-        observeDragRoot(element.shadowRoot);
-        for (let index = element.shadowRoot.children.length - 1; index >= 0; index -= 1) {
-          stack.push(element.shadowRoot.children[index]);
-        }
-      }
-
-      for (let index = element.children.length - 1; index >= 0; index -= 1) {
-        stack.push(element.children[index]);
-      }
-    }
+    if (!draggable || isInteractiveDragTarget(event.target)) return false;
+    return true;
   }
 
-  function roundedRegionNumber(value) {
-    return Math.round(Number(value) * 4) / 4;
-  }
-
-  function collectWindowDragRegions() {
-    const regions = [];
-    const stylesheetRegions = collectStylesheetAppRegions();
-    const viewportWidth = Math.max(0, Number(window.innerWidth) || 0);
-    const viewportHeight = Math.max(0, Number(window.innerHeight) || 0);
-
-    walkRegionElements(document, (element) => {
-      let region = appRegionForElement(element) || stylesheetRegions.get(element) || '';
-      if (!region && isInteractiveElement(element) && hasDraggableAncestor(element)) {
-        region = 'no-drag';
-      }
-      if (!region) return;
-
-      let style;
-      try {
-        style = getComputedStyle(element);
-      } catch {
-        return;
-      }
-      if (style.display === 'none' || style.visibility === 'hidden') return;
-
-      const rect = element.getBoundingClientRect();
-      const left = Math.max(0, Math.min(viewportWidth, rect.left));
-      const top = Math.max(0, Math.min(viewportHeight, rect.top));
-      const right = Math.max(0, Math.min(viewportWidth, rect.right));
-      const bottom = Math.max(0, Math.min(viewportHeight, rect.bottom));
-      const width = right - left;
-      const height = bottom - top;
-      if (width <= 0 || height <= 0) return;
-
-      regions.push({
-        x: roundedRegionNumber(left),
-        y: roundedRegionNumber(top),
-        width: roundedRegionNumber(width),
-        height: roundedRegionNumber(height),
-        draggable: region === 'drag'
-      });
-    });
-
-    return {
-      type: 'system',
-      command: 'set-window-drag-regions',
-      viewport: {
-        width: roundedRegionNumber(viewportWidth),
-        height: roundedRegionNumber(viewportHeight)
-      },
-      deviceScaleFactor: Number(window.devicePixelRatio) || 1,
-      regions
-    };
-  }
-
-  function publishWindowDragRegions() {
-    dragRegionFrame = 0;
-    const payload = collectWindowDragRegions();
-    const serialized = JSON.stringify(payload);
-    if (serialized === lastDragRegionPayload) return;
-    lastDragRegionPayload = serialized;
-    sendNow(payload);
-  }
-
-  function scheduleWindowDragRegionUpdate() {
-    if (dragRegionFrame) return;
-    dragRegionFrame = requestAnimationFrame(publishWindowDragRegions);
-  }
-
-  function activateWindowDragRegions() {
-    observeDragRoot(document.documentElement);
-    scheduleWindowDragRegionUpdate();
-
-    if (typeof ResizeObserver === 'function') {
-      const resizeObserver = new ResizeObserver(scheduleWindowDragRegionUpdate);
-      resizeObserver.observe(document.documentElement);
-      if (document.body) resizeObserver.observe(document.body);
-    }
-  }
-
-  dragRegionObserver = new MutationObserver(scheduleWindowDragRegionUpdate);
-  window.addEventListener('resize', scheduleWindowDragRegionUpdate, { passive: true });
-  window.addEventListener('scroll', scheduleWindowDragRegionUpdate, { capture: true, passive: true });
-  window.addEventListener('transitionend', scheduleWindowDragRegionUpdate, true);
-  window.addEventListener('animationend', scheduleWindowDragRegionUpdate, true);
-  window.addEventListener('load', scheduleWindowDragRegionUpdate, { once: true });
-  document.addEventListener('load', scheduleWindowDragRegionUpdate, true);
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', activateWindowDragRegions, { once: true });
-  } else {
-    activateWindowDragRegions();
-  }
+  document.addEventListener('mousedown', (event) => {
+    if (!shouldStartWindowDrag(event)) return;
+    event.preventDefault();
+    sendNow({ type: 'system', command: 'start-window-drag' });
+  }, true);
 
   function makeEvent(channel) {
     return Object.freeze({

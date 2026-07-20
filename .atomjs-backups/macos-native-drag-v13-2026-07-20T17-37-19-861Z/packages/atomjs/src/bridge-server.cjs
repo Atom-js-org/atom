@@ -164,11 +164,7 @@ class BridgeServer {
     }
 
     if (message.type === 'system') {
-      if (message.command === 'start-window-drag') {
-        win._startNativeDrag();
-      } else if (message.command === 'set-window-drag-regions') {
-        win._setNativeDragRegions(message.regions, message.viewport);
-      }
+      if (message.command === 'start-window-drag') win._startNativeDrag();
       return;
     }
 

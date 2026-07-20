@@ -70,51 +70,6 @@ static NSColor *AtomJSColor(NSString *hex) {
   return [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha];
 }
 
-static NSRect AtomJSVirtualDesktopFrame(void) {
-  NSArray<NSScreen *> *screens = [NSScreen screens];
-  if (screens.count == 0) {
-    NSScreen *mainScreen = [NSScreen mainScreen];
-    return mainScreen ? mainScreen.frame : NSZeroRect;
-  }
-
-  NSRect frame = screens.firstObject.frame;
-  for (NSUInteger index = 1; index < screens.count; index += 1) {
-    NSScreen *screen = screens[index];
-    frame = NSUnionRect(frame, screen.frame);
-  }
-  return frame;
-}
-
-static NSRect AtomJSCocoaFrameFromAtomBounds(NSDictionary *bounds, NSRect fallback) {
-  NSRect virtualDesktop = AtomJSVirtualDesktopFrame();
-  CGFloat width = MAX(1.0, [AtomJSNumber(bounds[@"width"], @(fallback.size.width)) doubleValue]);
-  CGFloat height = MAX(1.0, [AtomJSNumber(bounds[@"height"], @(fallback.size.height)) doubleValue]);
-  CGFloat defaultX = fallback.origin.x - NSMinX(virtualDesktop);
-  CGFloat defaultY = NSMaxY(virtualDesktop) - NSMaxY(fallback);
-  CGFloat atomX = [AtomJSNumber(bounds[@"x"], @(defaultX)) doubleValue];
-  CGFloat atomY = [AtomJSNumber(bounds[@"y"], @(defaultY)) doubleValue];
-
-  return NSMakeRect(
-    NSMinX(virtualDesktop) + atomX,
-    NSMaxY(virtualDesktop) - atomY - height,
-    width,
-    height
-  );
-}
-
-static NSDictionary *AtomJSAtomBoundsFromWindow(NSWindow *window) {
-  if (!window) return @{ @"x": @0, @"y": @0, @"width": @0, @"height": @0 };
-
-  NSRect virtualDesktop = AtomJSVirtualDesktopFrame();
-  NSRect frame = window.frame;
-  return @{
-    @"x": @(frame.origin.x - NSMinX(virtualDesktop)),
-    @"y": @(NSMaxY(virtualDesktop) - NSMaxY(frame)),
-    @"width": @(frame.size.width),
-    @"height": @(frame.size.height)
-  };
-}
-
 static void AtomJSConfigureTransparentWebView(WKWebView *webView) {
   if (!webView) return;
 
@@ -177,129 +132,15 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   application.applicationIconImage = icon ?: AtomJSDefaultApplicationIcon();
 }
 
-@interface AtomJSDraggableContentView : NSView
-@property(nonatomic, strong) WKWebView *webView;
-@property(nonatomic, copy) NSArray<NSDictionary *> *dragRegions;
-@property(nonatomic, assign) NSSize viewportSize;
-- (instancetype)initWithFrame:(NSRect)frame webView:(WKWebView *)webView;
-- (void)updateDragRegions:(NSArray *)regions viewport:(NSDictionary *)viewport;
-@end
-
-@implementation AtomJSDraggableContentView
-
-- (instancetype)initWithFrame:(NSRect)frame webView:(WKWebView *)webView {
-  self = [super initWithFrame:frame];
-  if (!self) return nil;
-
-  _webView = webView;
-  _dragRegions = @[];
-  _viewportSize = frame.size;
-  self.autoresizesSubviews = YES;
-  webView.frame = self.bounds;
-  webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  [self addSubview:webView];
-  return self;
-}
-
-- (BOOL)isFlipped {
-  return YES;
-}
-
-- (void)layout {
-  [super layout];
-  self.webView.frame = self.bounds;
-}
-
-- (void)updateDragRegions:(NSArray *)regions viewport:(NSDictionary *)viewport {
-  NSMutableArray<NSDictionary *> *normalized = [NSMutableArray array];
-  for (id value in [regions isKindOfClass:[NSArray class]] ? regions : @[]) {
-    if (![value isKindOfClass:[NSDictionary class]]) continue;
-    NSDictionary *region = value;
-    NSNumber *x = AtomJSNumber(region[@"x"], nil);
-    NSNumber *y = AtomJSNumber(region[@"y"], nil);
-    NSNumber *width = AtomJSNumber(region[@"width"], nil);
-    NSNumber *height = AtomJSNumber(region[@"height"], nil);
-    if (!x || !y || !width || !height || width.doubleValue <= 0 || height.doubleValue <= 0) continue;
-
-    [normalized addObject:@{
-      @"x": x,
-      @"y": y,
-      @"width": width,
-      @"height": height,
-      @"draggable": @(AtomJSBoolean(region[@"draggable"], NO))
-    }];
-    if (normalized.count >= 4096) break;
-  }
-
-  CGFloat viewportWidth = [AtomJSNumber(viewport[@"width"], @(self.bounds.size.width)) doubleValue];
-  CGFloat viewportHeight = [AtomJSNumber(viewport[@"height"], @(self.bounds.size.height)) doubleValue];
-  self.viewportSize = NSMakeSize(
-    viewportWidth > 0 ? viewportWidth : self.bounds.size.width,
-    viewportHeight > 0 ? viewportHeight : self.bounds.size.height
-  );
-  self.dragRegions = normalized;
-}
-
-- (BOOL)isDraggablePoint:(NSPoint)point {
-  CGFloat scaleX = self.viewportSize.width > 0 ? self.bounds.size.width / self.viewportSize.width : 1.0;
-  CGFloat scaleY = self.viewportSize.height > 0 ? self.bounds.size.height / self.viewportSize.height : 1.0;
-  BOOL draggable = NO;
-
-  for (NSDictionary *region in self.dragRegions) {
-    NSRect rect = NSMakeRect(
-      [AtomJSNumber(region[@"x"], @0) doubleValue] * scaleX,
-      [AtomJSNumber(region[@"y"], @0) doubleValue] * scaleY,
-      [AtomJSNumber(region[@"width"], @0) doubleValue] * scaleX,
-      [AtomJSNumber(region[@"height"], @0) doubleValue] * scaleY
-    );
-    if (!NSPointInRect(point, rect)) continue;
-    if (!AtomJSBoolean(region[@"draggable"], NO)) return NO;
-    draggable = YES;
-  }
-
-  return draggable;
-}
-
-- (NSView *)hitTest:(NSPoint)point {
-  if ([self isDraggablePoint:point]) return self;
-  return [super hitTest:point];
-}
-
-- (BOOL)acceptsFirstMouse:(NSEvent *)event {
-  return YES;
-}
-
-- (void)mouseDown:(NSEvent *)event {
-  if (!self.window || event.buttonNumber != 0) {
-    [super mouseDown:event];
-    return;
-  }
-
-  if (event.clickCount == 2) {
-    NSButton *zoomButton = [self.window standardWindowButton:NSWindowZoomButton];
-    if (zoomButton.enabled) {
-      [self.window zoom:nil];
-      return;
-    }
-  }
-
-  [self.window performWindowDragWithEvent:event];
-}
-
-@end
-
 @interface AtomJSWindowController : NSObject <NSWindowDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) NSNumber *windowId;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
-@property(nonatomic, strong) AtomJSDraggableContentView *contentView;
 @property(nonatomic, weak) AtomJSWindowController *parentController;
 @property(nonatomic, assign) BOOL modal;
 - (instancetype)initWithWindowId:(NSNumber *)windowId config:(NSDictionary *)config;
 - (void)navigate:(NSString *)urlString;
 - (void)beginWindowDrag;
-- (void)updateDragRegions:(NSArray *)regions viewport:(NSDictionary *)viewport;
-- (void)emitBoundsChangedWithReason:(NSString *)reason;
 @end
 
 @implementation AtomJSWindowController
@@ -371,13 +212,7 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   }
 
   if ([config[@"x"] isKindOfClass:[NSNumber class]] && [config[@"y"] isKindOfClass:[NSNumber class]]) {
-    NSDictionary *initialBounds = @{
-      @"x": config[@"x"],
-      @"y": config[@"y"],
-      @"width": @(_window.frame.size.width),
-      @"height": @(_window.frame.size.height)
-    };
-    [_window setFrame:AtomJSCocoaFrameFromAtomBounds(initialBounds, _window.frame) display:NO animate:NO];
+    [_window setFrameOrigin:NSMakePoint([config[@"x"] doubleValue], [config[@"y"] doubleValue])];
   } else if (AtomJSBoolean(config[@"center"], YES)) {
     [_window center];
   }
@@ -399,11 +234,7 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   _webView.navigationDelegate = self;
   _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   if (AtomJSBoolean(config[@"transparent"], NO)) AtomJSConfigureTransparentWebView(_webView);
-
-  _contentView = [[AtomJSDraggableContentView alloc]
-    initWithFrame:NSMakeRect(0, 0, width, height)
-    webView:_webView];
-  _window.contentView = _contentView;
+  _window.contentView = _webView;
 
   NSNumber *parentWindowId = AtomJSNumber(config[@"parentWindowId"], nil);
   _parentController = parentWindowId ? atomWindows[parentWindowId] : nil;
@@ -443,30 +274,22 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
 }
 
 - (void)beginWindowDrag {
-  NSEvent *event = [NSApp currentEvent];
-  if (
-    !self.window ||
-    !event ||
-    event.type != NSEventTypeLeftMouseDown ||
-    event.window != self.window
-  ) {
-    return;
-  }
+  if (!self.window || ([NSEvent pressedMouseButtons] & 1) == 0) return;
 
-  [self.window performWindowDragWithEvent:event];
-}
+  NSPoint screenLocation = [NSEvent mouseLocation];
+  NSPoint windowLocation = [self.window convertPointFromScreen:screenLocation];
+  NSEvent *mouseDown = [NSEvent
+    mouseEventWithType:NSEventTypeLeftMouseDown
+    location:windowLocation
+    modifierFlags:0
+    timestamp:[[NSProcessInfo processInfo] systemUptime]
+    windowNumber:self.window.windowNumber
+    context:nil
+    eventNumber:0
+    clickCount:1
+    pressure:1.0];
 
-- (void)updateDragRegions:(NSArray *)regions viewport:(NSDictionary *)viewport {
-  [self.contentView updateDragRegions:regions viewport:viewport];
-}
-
-- (void)emitBoundsChangedWithReason:(NSString *)reason {
-  AtomJSEmit(@{
-    @"type": @"bounds-changed",
-    @"windowId": self.windowId,
-    @"reason": reason ?: @"unknown",
-    @"bounds": AtomJSAtomBoundsFromWindow(self.window)
-  });
+  if (mouseDown) [self.window performWindowDragWithEvent:mouseDown];
 }
 
 - (void)navigate:(NSString *)urlString {
@@ -558,14 +381,6 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
     @"type": @"restore",
     @"windowId": self.windowId
   });
-}
-
-- (void)windowDidMove:(NSNotification *)notification {
-  [self emitBoundsChangedWithReason:@"move"];
-}
-
-- (void)windowDidResize:(NSNotification *)notification {
-  [self emitBoundsChangedWithReason:@"resize"];
 }
 
 @end
@@ -725,7 +540,6 @@ static void AtomJSHandleMessage(NSDictionary *message) {
       @"type": @"created",
       @"windowId": windowId
     });
-    [controller emitBoundsChangedWithReason:@"create"];
     return;
   }
 
@@ -771,10 +585,6 @@ static void AtomJSHandleMessage(NSDictionary *message) {
     [NSApp activateIgnoringOtherApps:YES];
   } else if ([command isEqualToString:@"start-drag"]) {
     [controller beginWindowDrag];
-  } else if ([command isEqualToString:@"set-drag-regions"]) {
-    NSArray *regions = [message[@"regions"] isKindOfClass:[NSArray class]] ? message[@"regions"] : @[];
-    NSDictionary *viewport = [message[@"viewport"] isKindOfClass:[NSDictionary class]] ? message[@"viewport"] : @{};
-    [controller updateDragRegions:regions viewport:viewport];
   } else if ([command isEqualToString:@"close"] || [command isEqualToString:@"destroy"]) {
     [controller.window close];
   } else if ([command isEqualToString:@"set-title"]) {
@@ -793,12 +603,13 @@ static void AtomJSHandleMessage(NSDictionary *message) {
     BOOL active = (controller.window.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen;
     if (requested != active) [controller.window toggleFullScreen:nil];
   } else if ([command isEqualToString:@"set-bounds"]) {
-    NSDictionary *requested = [message[@"bounds"] isKindOfClass:[NSDictionary class]] ? message[@"bounds"] : @{};
-    NSMutableDictionary *bounds = [AtomJSAtomBoundsFromWindow(controller.window) mutableCopy];
-    for (NSString *key in @[ @"x", @"y", @"width", @"height" ]) {
-      if ([requested[key] isKindOfClass:[NSNumber class]]) bounds[key] = requested[key];
-    }
-    [controller.window setFrame:AtomJSCocoaFrameFromAtomBounds(bounds, controller.window.frame) display:YES animate:NO];
+    NSDictionary *bounds = [message[@"bounds"] isKindOfClass:[NSDictionary class]] ? message[@"bounds"] : @{};
+    NSRect frame = controller.window.frame;
+    if ([bounds[@"x"] isKindOfClass:[NSNumber class]]) frame.origin.x = [bounds[@"x"] doubleValue];
+    if ([bounds[@"y"] isKindOfClass:[NSNumber class]]) frame.origin.y = [bounds[@"y"] doubleValue];
+    if ([bounds[@"width"] isKindOfClass:[NSNumber class]]) frame.size.width = MAX(1.0, [bounds[@"width"] doubleValue]);
+    if ([bounds[@"height"] isKindOfClass:[NSNumber class]]) frame.size.height = MAX(1.0, [bounds[@"height"] doubleValue]);
+    [controller.window setFrame:frame display:YES animate:NO];
   } else if ([command isEqualToString:@"set-always-on-top"]) {
     controller.window.level = AtomJSBoolean(message[@"value"], NO) ? NSFloatingWindowLevel : NSNormalWindowLevel;
   } else if ([command isEqualToString:@"set-opacity"]) {

@@ -108,7 +108,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.5.1-alpha.0',
+      atomjsVersion: '0.5.2-alpha.0',
       target,
       productName,
       appId: project.config.appId,

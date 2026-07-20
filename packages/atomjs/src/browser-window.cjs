@@ -219,6 +219,11 @@ class BrowserWindow extends EventEmitter {
     return false;
   }
 
+  _startNativeDrag() {
+    if (this._destroyed) return false;
+    return this._sendHostCommand({ command: 'start-drag' });
+  }
+
   _markRendererReady(details) {
     this._notifyDidFinishLoad(details && details.href ? details.href : this._currentUrl, 'bridge');
   }
@@ -331,6 +336,12 @@ class BrowserWindow extends EventEmitter {
   focus() {
     if (!this._sendHostCommand({ command: 'focus' })) {
       console.warn('[AtomJS] Native focus is not supported by the current platform host.');
+    }
+  }
+
+  startDrag() {
+    if (!this._startNativeDrag()) {
+      console.warn('[AtomJS] Native window dragging is not supported by the current platform host.');
     }
   }
 

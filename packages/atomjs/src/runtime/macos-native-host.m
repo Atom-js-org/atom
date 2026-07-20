@@ -140,6 +140,7 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
 @property(nonatomic, assign) BOOL modal;
 - (instancetype)initWithWindowId:(NSNumber *)windowId config:(NSDictionary *)config;
 - (void)navigate:(NSString *)urlString;
+- (void)beginWindowDrag;
 @end
 
 @implementation AtomJSWindowController
@@ -175,6 +176,8 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
     defer:NO];
   _window.releasedWhenClosed = NO;
   _window.delegate = self;
+  _window.movable = YES;
+  _window.movableByWindowBackground = NO;
   _window.title = AtomJSString(config[@"title"], atomAppName);
   _window.backgroundColor = AtomJSColor(config[@"backgroundColor"]);
   _window.tabbingMode = NSWindowTabbingModeDisallowed;
@@ -268,6 +271,25 @@ static void AtomJSConfigureApplicationIdentity(NSApplication *application) {
   }
 
   return self;
+}
+
+- (void)beginWindowDrag {
+  if (!self.window || ([NSEvent pressedMouseButtons] & 1) == 0) return;
+
+  NSPoint screenLocation = [NSEvent mouseLocation];
+  NSPoint windowLocation = [self.window convertPointFromScreen:screenLocation];
+  NSEvent *mouseDown = [NSEvent
+    mouseEventWithType:NSEventTypeLeftMouseDown
+    location:windowLocation
+    modifierFlags:0
+    timestamp:[[NSProcessInfo processInfo] systemUptime]
+    windowNumber:self.window.windowNumber
+    context:nil
+    eventNumber:0
+    clickCount:1
+    pressure:1.0];
+
+  if (mouseDown) [self.window performWindowDragWithEvent:mouseDown];
 }
 
 - (void)navigate:(NSString *)urlString {
@@ -561,6 +583,8 @@ static void AtomJSHandleMessage(NSDictionary *message) {
     [controller.window makeKeyAndOrderFront:nil];
     [controller.window orderFrontRegardless];
     [NSApp activateIgnoringOtherApps:YES];
+  } else if ([command isEqualToString:@"start-drag"]) {
+    [controller beginWindowDrag];
   } else if ([command isEqualToString:@"close"] || [command isEqualToString:@"destroy"]) {
     [controller.window close];
   } else if ([command isEqualToString:@"set-title"]) {

@@ -28,6 +28,18 @@ test('preload bridge exposes contextBridge and ipcRenderer compatibility', () =>
   assert.match(script, /AtomJS system-WebView preload/);
 });
 
+test('renderer bridge maps Electron-style app regions to one native drag command', () => {
+  const script = generateBridgeScript({
+    websocketUrl: 'ws://127.0.0.1:1234/__atom/ws',
+    preloadCode: ''
+  });
+  assert.match(script, /-webkit-app-region/);
+  assert.match(script, /data-atom-drag-region/);
+  assert.match(script, /data-atom-no-drag/);
+  assert.match(script, /command: 'start-window-drag'/);
+  assert.doesNotMatch(script, /setBounds/);
+});
+
 test('bridge serves files and handles invoke IPC', async (t) => {
   await atom.app.whenReady();
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-test-'));
@@ -186,6 +198,33 @@ test('Windows host activates OAuth windows and supports native ownership', () =>
   assert.match(source, /SetActiveWindow\(\$child\)/);
   assert.match(source, /SetForegroundWindow\(\$child\)/);
   assert.match(source, /windowsHide: true/);
+});
+
+test('BrowserWindow starts one native drag operation instead of renderer-driven movement', () => {
+  const win = new atom.BrowserWindow({ show: false, frame: false });
+  const messages = [];
+  win._nativeHost = { send(message) { messages.push(message); } };
+
+  win.startDrag();
+
+  assert.deepEqual(messages, [{ command: 'start-drag', windowId: win.id }]);
+  win.destroy();
+});
+
+test('macOS custom title bars use AppKit native window dragging', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'runtime', 'macos-native-host.m'),
+    'utf8'
+  );
+  const bridgeServer = fs.readFileSync(
+    path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'bridge-server.cjs'),
+    'utf8'
+  );
+
+  assert.match(source, /performWindowDragWithEvent/);
+  assert.match(source, /mouseEventWithType:NSEventTypeLeftMouseDown/);
+  assert.match(source, /command isEqualToString:@"start-drag"/);
+  assert.match(bridgeServer, /message\.command === 'start-window-drag'/);
 });
 
 test('macOS host maps modal, title-bar and visual options to AppKit', () => {

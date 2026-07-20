@@ -80,3 +80,29 @@ Some after-creation native mutations are currently complete on the shared macOS 
 ## Compatibility boundary
 
 AtomJS can match the Electron main/preload architecture and many window APIs while using system WebViews. Chromium-only APIs, Chrome extensions, Electron native ABI modules and exact browser-engine behavior are outside that boundary and must remain explicit rather than silently pretending to work.
+
+## Native custom title-bar dragging
+
+Frameless and hidden-title-bar windows can use Electron-compatible drag regions without sending a stream of `setBounds()` calls from JavaScript. AtomJS detects `-webkit-app-region: drag` in the renderer and asks AppKit to perform one native window drag operation.
+
+```css
+.titlebar {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar button,
+.titlebar input {
+  -webkit-app-region: no-drag;
+}
+```
+
+For WebKit versions that do not expose the Electron CSS property through computed styles, add the AtomJS fallback attribute to the same element:
+
+```html
+<header class="titlebar" data-atom-drag-region>
+  <button data-atom-no-drag>Close</button>
+</header>
+```
+
+Interactive controls are treated as non-draggable by default. Main-process code can also begin the same native operation with `window.startDrag()` while the primary mouse button is held. Do not implement custom title-bar movement by calling `setBounds()` for every `mousemove` or `pointermove`; that crosses the renderer, Node.js, and native-host boundaries for every frame and causes visible lag.

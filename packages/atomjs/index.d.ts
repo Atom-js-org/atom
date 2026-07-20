@@ -61,6 +61,7 @@ export class BrowserWindow extends EventEmitter {
   hide(): void;
   isVisible(): boolean;
   focus(): void;
+  startDrag(): void;
   blur(): void;
   close(): void;
   destroy(): void;

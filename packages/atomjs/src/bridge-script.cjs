@@ -39,6 +39,68 @@ function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
     }
   }
 
+  function normalizeAppRegion(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'drag' || normalized === 'no-drag' ? normalized : '';
+  }
+
+  function appRegionForElement(element) {
+    if (!(element instanceof Element)) return '';
+    if (element.hasAttribute('data-atom-no-drag')) return 'no-drag';
+    if (element.hasAttribute('data-atom-drag-region')) return 'drag';
+
+    const attribute = normalizeAppRegion(
+      element.getAttribute('data-atom-app-region') || element.getAttribute('data-app-region')
+    );
+    if (attribute) return attribute;
+
+    const inline = normalizeAppRegion(
+      element.style && (
+        element.style.getPropertyValue('-webkit-app-region') ||
+        element.style.getPropertyValue('app-region')
+      )
+    );
+    if (inline) return inline;
+
+    try {
+      const computed = getComputedStyle(element);
+      return normalizeAppRegion(
+        computed.getPropertyValue('-webkit-app-region') ||
+        computed.getPropertyValue('app-region')
+      );
+    } catch {
+      return '';
+    }
+  }
+
+  function isInteractiveDragTarget(element) {
+    return element instanceof Element && Boolean(element.closest(
+      'button, input, textarea, select, option, a[href], [contenteditable=""], [contenteditable="true"], [role="button"]'
+    ));
+  }
+
+  function shouldStartWindowDrag(event) {
+    if (event.button !== 0 || event.defaultPrevented) return false;
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+    let draggable = false;
+
+    for (const entry of path) {
+      if (!(entry instanceof Element)) continue;
+      const region = appRegionForElement(entry);
+      if (region === 'no-drag') return false;
+      if (region === 'drag') draggable = true;
+    }
+
+    if (!draggable || isInteractiveDragTarget(event.target)) return false;
+    return true;
+  }
+
+  document.addEventListener('mousedown', (event) => {
+    if (!shouldStartWindowDrag(event)) return;
+    event.preventDefault();
+    sendNow({ type: 'system', command: 'start-window-drag' });
+  }, true);
+
   function makeEvent(channel) {
     return Object.freeze({
       channel,

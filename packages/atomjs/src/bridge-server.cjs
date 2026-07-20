@@ -163,6 +163,11 @@ class BridgeServer {
       return;
     }
 
+    if (message.type === 'system') {
+      if (message.command === 'start-window-drag') win._startNativeDrag();
+      return;
+    }
+
     if (message.type === 'send') {
       const event = createIpcEvent(win);
       ipcMain.emit(message.channel, event, ...(Array.isArray(message.args) ? message.args : []));

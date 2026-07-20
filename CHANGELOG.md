@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2-alpha.0
+
+- Added Electron-compatible `-webkit-app-region: drag` handling for custom title bars.
+- Uses AppKit's native `performWindowDragWithEvent:` operation instead of repeated renderer-driven `setBounds()` calls.
+- Added `data-atom-drag-region` and `data-atom-no-drag` fallbacks for system WebViews that do not expose the Electron CSS property.
+- Added `BrowserWindow.startDrag()` for explicit main-process native dragging.
+
 ## 0.5.1-alpha.0
 
 - Fixes macOS native-host compilation on SDKs where `WKWebView.drawsBackground` is not a public Objective-C property.

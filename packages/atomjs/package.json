@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/runtime",
-  "version": "0.5.3-alpha.0",
+  "version": "0.5.3-alpha.1",
   "description": "Electron-like desktop runtime powered by the operating system WebView.",
   "main": "src/index.cjs",
   "types": "index.d.ts",
@@ -19,10 +19,11 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20.12"
+    "node": ">=24"
   },
   "dependencies": {
-    "ws": "^8.21.1"
+    "ws": "^8.21.1",
+    "@webviewjs/webview": "0.4.0"
   },
   "repository": {
     "type": "git",

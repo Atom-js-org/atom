@@ -3,6 +3,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { loadProject, hostTarget } = require('./utils.cjs');
 const { ensureElectronCompatibility } = require('./electron-compat.cjs');
 
@@ -26,26 +27,16 @@ async function runDev(options) {
   const iconPath = project.config.icon
     ? path.resolve(project.root, project.config.icon)
     : null;
-  const child = spawn(process.execPath, [mainPath], {
-    cwd: project.root,
-    env: {
-      ...process.env,
-      ATOM_PROJECT_ROOT: project.root,
-      ATOM_APP_NAME: project.config.productName,
-      ATOM_APP_ID: project.config.appId,
-      ...(iconPath && fs.existsSync(iconPath) ? { ATOM_APP_ICON: iconPath } : {}),
-      ATOM_DEV: '1'
-    },
-    stdio: 'inherit'
+  Object.assign(process.env, {
+    ATOM_PROJECT_ROOT: project.root,
+    ATOM_APP_NAME: project.config.productName,
+    ATOM_APP_ID: project.config.appId,
+    ...(iconPath && fs.existsSync(iconPath) ? { ATOM_APP_ICON: iconPath } : {}),
+    ATOM_DEV: '1'
   });
-
-  await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0 || signal === 'SIGTERM' || signal === 'SIGINT') resolve();
-      else reject(new Error(`Application exited with code ${code}`));
-    });
-  });
+  process.title = project.config.productName;
+  process.chdir(project.root);
+  await import(pathToFileURL(mainPath).href);
 }
 
 async function runBuild(options) {

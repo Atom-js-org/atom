@@ -1,0 +1,1155 @@
+diff --git a/.github/workflows/atom-build.yml b/.github/workflows/atom-build.yml
+index 4ba5561..42c327c 100755
+--- a/.github/workflows/atom-build.yml
++++ b/.github/workflows/atom-build.yml
+@@ -20,11 +20,22 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+         with:
+-          node-version: 22
++          node-version: 24
+           cache: npm
+       - run: npm ci
+       - run: npm test
+       - run: npm run verify:electron
++      - name: Verify Windows prebuilt binding
++        if: runner.os == 'Windows'
++        shell: pwsh
++        run: |
++          node -e "require.resolve('@webviewjs/webview/package.json'); console.log('Windows binding package resolved')"
++      - name: Build and verify native Windows app
++        if: runner.os == 'Windows'
++        shell: pwsh
++        run: |
++          node packages/cli/bin/atom.cjs build windows --local --project tests/fixtures/macos-smoke
++          if (!(Test-Path 'tests/fixtures/macos-smoke/build/windows/portable/AtomJS Smoke.exe')) { throw 'Windows executable was not created' }
+       - name: Build and verify native macOS app
+         if: runner.os == 'macOS'
+         run: |
+@@ -41,7 +52,7 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+         with:
+-          node-version: 22
++          node-version: 24
+           cache: npm
+       - run: npm ci
+       - run: npm run pack:dry
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 25225e6..0feef4b 100755
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 0.5.3-alpha.1
++
++- Replaced the Windows `webview-nodejs` build-time dependency with the prebuilt `@webviewjs/webview` backend.
++- Runs Windows native windows in the AtomJS main process instead of one Node helper process per window.
++- Runs `atom run dev` in-process, removing the extra CLI parent process.
++- Keeps short temporary staging for Windows builds, so projects no longer need to be placed under `C:\\`.
++
++
+ ## 0.5.2-alpha.0
+ 
+ - Added Electron-compatible `-webkit-app-region: drag` handling for custom title bars.
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 6cdbfa6..d9fc7dc 100755
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -1,6 +1,6 @@
+ # Contributing
+ 
+-1. Use Node.js 20.12 or newer.
++1. Use Node.js 24 or newer.
+ 2. Run `npm install`.
+ 3. Run `npm test` before opening a pull request.
+ 4. Keep the public API close to Electron where the system WebView can support equivalent behavior.
+diff --git a/README.md b/README.md
+index 3efe634..9d6724c 100755
+--- a/README.md
++++ b/README.md
+@@ -4,6 +4,8 @@
+ 
+ # AtomJS
+ 
++> **Windows:** AtomJS uses a prebuilt WebView2 binding. CMake and Visual Studio Build Tools are not required for normal installation or builds, and the project may live in any writable directory. AtomJS itself stays in one application process; Microsoft WebView2 can still create its own sandboxed renderer/GPU processes.
++
+ **Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.**
+ 
+ AtomJS keeps the Electron development model while rendering with the operating system WebView instead of shipping a private Chromium runtime in every application.
+@@ -106,7 +108,7 @@ AtomJS mirrors Electron's familiar split:
+ - **IPC:** authenticated localhost WebSocket transport between the renderer and Node.js main process.
+ - **Compatibility facade:** exposes Electron-style module names to application code and transitive npm dependencies.
+ 
+-AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux. WebView2 uses the Microsoft Edge rendering engine, so Windows still uses a Chromium-derived system engine, but AtomJS does not ship its own Chromium copy. Windows and Linux currently use the small `webview-nodejs` adapter. macOS uses one native Cocoa/WKWebView host compiled with the system SDK; it does not use `osascript` and does not create a separate application identity for every window.
++AtomJS uses the operating-system WebView: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux. WebView2 uses the Microsoft Edge rendering engine, so Windows still uses a Chromium-derived system engine, but AtomJS does not ship its own Chromium copy. Windows uses the prebuilt `@webviewjs/webview` binding in the AtomJS main process, so normal installation does not require CMake or Visual Studio Build Tools. Linux currently uses the small `webview-nodejs` adapter. macOS uses one native Cocoa/WKWebView host compiled with the system SDK; it does not use `osascript` and does not create a separate application identity for every window.
+ 
+ ## Electron compatibility
+ 
+@@ -116,7 +118,7 @@ Chromium-specific behavior and native platform features cannot become identical
+ 
+ ## Important technical truth
+ 
+-AtomJS contains no Rust and does not bundle Chromium. Plain Node.js cannot directly create an AppKit/WKWebView window, so macOS uses a small Objective-C host compiled with Apple's Command Line Tools. The application logic and public API remain Node.js, while one native host owns all macOS windows. Windows and Linux still require a thin native adapter for WebView2 or WebKitGTK.
++AtomJS contains no Rust and does not bundle Chromium. Plain Node.js cannot directly create an AppKit/WKWebView window, so macOS uses a small Objective-C host compiled with Apple's Command Line Tools. The application logic and public API remain Node.js, while one native host owns all macOS windows. Windows uses a prebuilt native adapter for WebView2, while Linux still requires the WebKitGTK adapter and its development packages.
+ 
+ This is an **alpha foundation**, not yet a production-complete reimplementation of every Electron API. The compatibility layer supports Electron-oriented dependencies such as MSMC, repeated OAuth navigation events, owned login windows and foreground activation on Windows.
+ 
+@@ -135,7 +137,7 @@ npm install electron@npm:@atom-js-org/electron@alpha
+ npm install --save-dev @atom-js-org/cli@alpha
+ ```
+ 
+-On macOS, AtomJS uses a shared native WKWebView host and does not require `webview-nodejs` or `osascript`. The first development run may compile the host with the Xcode Command Line Tools. Linux and Windows currently use a thin native system-WebView adapter. Run `npx atom doctor` for platform checks.
++On macOS, AtomJS uses a shared native WKWebView host and does not require `webview-nodejs` or `osascript`. The first development run may compile the host with the Xcode Command Line Tools. Windows uses a prebuilt WebView2 binding and does not require CMake or Visual Studio Build Tools. Linux uses `webview-nodejs` with the WebKitGTK development packages. Run `npx atom doctor` for platform checks.
+ 
+ ## License
+ 
+diff --git a/THIRD_PARTY_NOTICES.md b/THIRD_PARTY_NOTICES.md
+index db39a5d..22b3d23 100755
+--- a/THIRD_PARTY_NOTICES.md
++++ b/THIRD_PARTY_NOTICES.md
+@@ -6,6 +6,7 @@ AtomJS is an original implementation inspired by Electron's developer-facing pro
+ 
+ AtomJS uses external packages rather than copying their source into this repository:
+ 
++- `@webviewjs/webview`, MIT: https://github.com/webview/webview
+ - `webview-nodejs`, Apache-2.0: https://github.com/Winterreisender/webview-nodejs
+ - `webview`, MIT: https://github.com/webview/webview
+ - `ws`, MIT: https://github.com/websockets/ws
+diff --git a/docs/BUILDING.md b/docs/BUILDING.md
+index 2f8fe82..c2cc852 100755
+--- a/docs/BUILDING.md
++++ b/docs/BUILDING.md
+@@ -8,7 +8,7 @@ atom build macos
+ atom build linux
+ ```
+ 
+-A local build must match the host operating system. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
++A local build must match the host operating system. Windows builds no longer require CMake or Visual Studio Build Tools; the WebView binding is downloaded as a prebuilt platform package. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
+ 
+ ## Configuration
+ 
+@@ -88,7 +88,7 @@ build/windows/
+ └── manifest.json
+ ```
+ 
+-The final executable uses the Windows GUI subsystem, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
++The final executable uses the Windows GUI subsystem and keeps the AtomJS main process and native window host in one process, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
+ 
+ ## macOS output
+ 
+diff --git a/docs/VALIDATION.md b/docs/VALIDATION.md
+index e7915c0..a2174d6 100755
+--- a/docs/VALIDATION.md
++++ b/docs/VALIDATION.md
+@@ -1,9 +1,9 @@
+ # Validation record
+ 
+-Validated for 0.5.2-alpha.0:
++Validated for 0.5.3-alpha.1:
+ 
+ - Node.js API and packaging tests cover Electron facade resolution, IPC, repeated OAuth navigation, parent/modal windows and customization options.
+-- Windows source checks cover GUI-subsystem output, PE signature handling, hidden helper processes, native owner assignment and foreground activation.
++- Windows source checks cover GUI-subsystem output, PE signature handling, the prebuilt in-process host, native owner assignment and foreground activation.
+ - Windows packaging checks cover executable metadata, ICO resources and customizable NSIS generation.
+ - macOS source checks cover shared AppKit lifecycle, sheets/child windows, title-bar options, app identity, icon handling and code signing.
+ - macOS packaging keeps signing and DMG generation on local temporary storage before copying artifacts to external volumes.
+diff --git a/package-lock.json b/package-lock.json
+index fd4bc49..642ed39 100755
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "@atom-js-org/monorepo",
+-  "version": "0.5.3-alpha.0",
++  "version": "0.5.3-alpha.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "@atom-js-org/monorepo",
+-      "version": "0.5.3-alpha.0",
++      "version": "0.5.3-alpha.1",
+       "license": "LicenseRef-AtomJS-1.0",
+       "workspaces": [
+         "packages/*"
+@@ -19,7 +19,7 @@
+         "@atom-js-org/cli": "file:packages/cli"
+       },
+       "engines": {
+-        "node": ">=20.12"
++        "node": ">=24"
+       }
+     },
+     "node_modules/@atom-js-org/cli": {
+@@ -83,6 +83,209 @@
+         "node": ">=14"
+       }
+     },
++    "node_modules/@webviewjs/webview": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview/-/webview-0.4.0.tgz",
++      "integrity": "sha512-DL00kAQZZk6VpDXjmsjbentZiJWINit4Sm/Ac6rtk+HLa5sBgXvit7pHqAR0aB+Tc9t0zaifoC3O/ZC5YQ6/OA==",
++      "license": "MIT",
++      "bin": {
++        "webview": "cli/index.mjs",
++        "webviewjs": "cli/index.mjs"
++      },
++      "engines": {
++        "node": ">= 24"
++      },
++      "optionalDependencies": {
++        "@webviewjs/webview-android-arm-eabi": "0.4.0",
++        "@webviewjs/webview-android-arm64": "0.4.0",
++        "@webviewjs/webview-darwin-arm64": "0.4.0",
++        "@webviewjs/webview-darwin-x64": "0.4.0",
++        "@webviewjs/webview-freebsd-x64": "0.4.0",
++        "@webviewjs/webview-linux-arm-gnueabihf": "0.4.0",
++        "@webviewjs/webview-linux-arm64-gnu": "0.4.0",
++        "@webviewjs/webview-linux-ia32-gnu": "0.4.0",
++        "@webviewjs/webview-linux-x64-gnu": "0.4.0",
++        "@webviewjs/webview-win32-arm64-msvc": "0.4.0",
++        "@webviewjs/webview-win32-ia32-msvc": "0.4.0",
++        "@webviewjs/webview-win32-x64-msvc": "0.4.0"
++      }
++    },
++    "node_modules/@webviewjs/webview-android-arm-eabi": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-android-arm-eabi/-/webview-android-arm-eabi-0.4.0.tgz",
++      "integrity": "sha512-OQxp0QH0THzsrE+E7+5cPrVqKDvfvB7trHZpOO1JQVkj0OamGoiKbSAQ0vo/PBwxZ7aXA5wbgdYXRGtT7YBbvA==",
++      "cpu": [
++        "arm"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-android-arm64": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-android-arm64/-/webview-android-arm64-0.4.0.tgz",
++      "integrity": "sha512-IrHmciZzTaehux8iIAlnCwTIIqWbb4wF0hdHnY59JPahi8BgV3infmKx3SNiIReWawbBrEYJnXWgopsAFP0xXg==",
++      "cpu": [
++        "arm64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-darwin-arm64": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-darwin-arm64/-/webview-darwin-arm64-0.4.0.tgz",
++      "integrity": "sha512-xTSDTRpcdFh0L0Lw59xt5Xcc3pfY4DuDTPmAA+dMzx069rlTxPMYSkGm/y17qruXsgWk07+NhqMF6HPueeB4jg==",
++      "cpu": [
++        "arm64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-darwin-x64": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-darwin-x64/-/webview-darwin-x64-0.4.0.tgz",
++      "integrity": "sha512-72dpgqjogzrftrJiaj5pW2iVls67fhIj880UZYy/FMlQFu16JBbZNqorLhGADBWfqAGQI6RZwN/CmgwMdXhqsg==",
++      "cpu": [
++        "x64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-freebsd-x64": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-freebsd-x64/-/webview-freebsd-x64-0.4.0.tgz",
++      "integrity": "sha512-J3eDQU3q+0nsL15wQ2k0jbRms4W0xrOUO6rMUDmiuHb1Iin38jvqI4ofxh5K4S/j4Y6+JNO8VW03FrPqeq1YaA==",
++      "cpu": [
++        "x64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-linux-arm-gnueabihf": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-linux-arm-gnueabihf/-/webview-linux-arm-gnueabihf-0.4.0.tgz",
++      "integrity": "sha512-Xa06M5qZFVBqm5+RLiFWl7jx/YdKIo1Sbzk3VMwQiaT0/RQvCArgNRJwWjc/+bmlohnK9S1ZwSsPU1HJ7kT0lA==",
++      "cpu": [
++        "arm"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-linux-arm64-gnu": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-linux-arm64-gnu/-/webview-linux-arm64-gnu-0.4.0.tgz",
++      "integrity": "sha512-mqRG2q8PbSISwO8tqNk23ax6uabkPeI6oTM9AWFwSbYqLcpgv+oB15nAWENm/6EV6AUja/MjPsEIFD7H7CqHnA==",
++      "cpu": [
++        "arm64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-linux-x64-gnu": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-linux-x64-gnu/-/webview-linux-x64-gnu-0.4.0.tgz",
++      "integrity": "sha512-ljyYhdOh6CyfWsoTEOcvzrwqkxqFe0ps+PblfqSQNHrGqB4SPMEgL6creMVz58/F4oE6DgTuZdtILWt6v9KUfw==",
++      "cpu": [
++        "x64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-win32-arm64-msvc": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-win32-arm64-msvc/-/webview-win32-arm64-msvc-0.4.0.tgz",
++      "integrity": "sha512-QZpoGoZkoRZpWtaPGFD3Sepxf6by8Tg8W7HQdt5t9c3SaFWwysDBYYiD9qZfW53ueTrQKTgjw7O8Yo/YZk2Qmw==",
++      "cpu": [
++        "arm64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-win32-ia32-msvc": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-win32-ia32-msvc/-/webview-win32-ia32-msvc-0.4.0.tgz",
++      "integrity": "sha512-o7jnpn+fMe86EiWNEwWfTadcddiQ8o6LXRNA2kJtORGOWyZHYrUmlXGV5UuEBBiBHaZhfid5GRdBXslMT3i+5A==",
++      "cpu": [
++        "ia32"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
++    "node_modules/@webviewjs/webview-win32-x64-msvc": {
++      "version": "0.4.0",
++      "resolved": "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/npm/npm-public/@webviewjs/webview-win32-x64-msvc/-/webview-win32-x64-msvc-0.4.0.tgz",
++      "integrity": "sha512-PV7hdDo3XCNga+rMD0z6fH27ikAMpUEQfelbk5+TdIRLyP//kmYpLHV5tWqJ+bPPQvO1REaZaIOa/I52RMDCZQ==",
++      "cpu": [
++        "x64"
++      ],
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">= 24"
++      }
++    },
+     "node_modules/abort-controller": {
+       "version": "3.0.0",
+       "resolved": "https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz",
+@@ -1218,18 +1421,19 @@
+     },
+     "packages/atomjs": {
+       "name": "@atom-js-org/runtime",
+-      "version": "0.5.3-alpha.0",
++      "version": "0.5.3-alpha.1",
+       "license": "LicenseRef-AtomJS-1.0",
+       "dependencies": {
++        "@webviewjs/webview": "0.4.0",
+         "ws": "^8.21.1"
+       },
+       "engines": {
+-        "node": ">=20.12"
++        "node": ">=24"
+       }
+     },
+     "packages/cli": {
+       "name": "@atom-js-org/cli",
+-      "version": "0.5.3-alpha.0",
++      "version": "0.5.3-alpha.1",
+       "license": "LicenseRef-AtomJS-1.0",
+       "dependencies": {
+         "archiver": "7.0.1",
+@@ -1242,18 +1446,18 @@
+         "atom": "bin/atom.cjs"
+       },
+       "engines": {
+-        "node": ">=20.12"
++        "node": ">=24"
+       }
+     },
+     "packages/electron-compat": {
+       "name": "@atom-js-org/electron",
+-      "version": "0.5.3-alpha.0",
++      "version": "0.5.3-alpha.1",
+       "license": "LicenseRef-AtomJS-1.0",
+       "dependencies": {
+-        "@atom-js-org/runtime": "0.5.3-alpha.0"
++        "@atom-js-org/runtime": "0.5.3-alpha.1"
+       },
+       "engines": {
+-        "node": ">=20.12"
++        "node": ">=24"
+       }
+     }
+   }
+diff --git a/package.json b/package.json
+index 663e8d6..7766371 100755
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@atom-js-org/monorepo",
+-  "version": "0.5.3-alpha.0",
++  "version": "0.5.3-alpha.1",
+   "private": true,
+   "description": "Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.",
+   "workspaces": [
+@@ -22,7 +22,7 @@
+     "@atom-js-org/cli": "file:packages/cli"
+   },
+   "engines": {
+-    "node": ">=20.12"
++    "node": ">=24"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/packages/atomjs/package.json b/packages/atomjs/package.json
+index 1b3c7a8..50ecb3a 100755
+--- a/packages/atomjs/package.json
++++ b/packages/atomjs/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@atom-js-org/runtime",
+-  "version": "0.5.3-alpha.0",
++  "version": "0.5.3-alpha.1",
+   "description": "Electron-like desktop runtime powered by the operating system WebView.",
+   "main": "src/index.cjs",
+   "types": "index.d.ts",
+@@ -19,10 +19,11 @@
+     "LICENSE"
+   ],
+   "engines": {
+-    "node": ">=20.12"
++    "node": ">=24"
+   },
+   "dependencies": {
+-    "ws": "^8.21.1"
++    "ws": "^8.21.1",
++    "@webviewjs/webview": "0.4.0"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/packages/atomjs/src/app.cjs b/packages/atomjs/src/app.cjs
+index d9814ee..be2c9c2 100755
+--- a/packages/atomjs/src/app.cjs
++++ b/packages/atomjs/src/app.cjs
+@@ -7,6 +7,7 @@ const fs = require('node:fs');
+ const state = require('./state.cjs');
+ const { BridgeServer } = require('./bridge-server.cjs');
+ const { stopNativeHost } = require('./native-host.cjs');
++const { stopWindowsNativeHost } = require('./windows-native-host.cjs');
+ 
+ class App extends EventEmitter {
+   constructor() {
+@@ -43,6 +44,7 @@ class App extends EventEmitter {
+ 
+     for (const win of [...state.windows.values()]) win.destroy();
+     await stopNativeHost();
++    await stopWindowsNativeHost();
+     if (state.bridgeServer) await state.bridgeServer.stop();
+     this.emit('will-quit');
+     this.emit('quit', {}, 0);
+diff --git a/packages/atomjs/src/browser-window.cjs b/packages/atomjs/src/browser-window.cjs
+index 17764ef..e90d47d 100755
+--- a/packages/atomjs/src/browser-window.cjs
++++ b/packages/atomjs/src/browser-window.cjs
+@@ -10,6 +10,7 @@ const app = require('./app.cjs');
+ const { WebContents } = require('./web-contents.cjs');
+ const { generateBridgeScript } = require('./bridge-script.cjs');
+ const { getNativeHost } = require('./native-host.cjs');
++const { getWindowsNativeHost } = require('./windows-native-host.cjs');
+ 
+ class BrowserWindow extends EventEmitter {
+   constructor(options = {}) {
+@@ -136,6 +137,10 @@ class BrowserWindow extends EventEmitter {
+       this._nativeHost = getNativeHost(app.getName());
+       this._hostAttached = true;
+       await this._nativeHost.createWindow(this, config);
++    } else if (process.platform === 'win32') {
++      this._nativeHost = getWindowsNativeHost();
++      this._hostAttached = true;
++      await this._nativeHost.createWindow(this, config);
+     } else {
+       await this._startLegacyHost(config);
+     }
+@@ -213,8 +218,7 @@ class BrowserWindow extends EventEmitter {
+ 
+   _sendHostCommand(command) {
+     if (this._nativeHost) {
+-      this._nativeHost.send({ ...command, windowId: this.id });
+-      return true;
++      return this._nativeHost.send({ ...command, windowId: this.id }) !== false;
+     }
+     return false;
+   }
+diff --git a/packages/atomjs/src/runtime/window-host.mjs b/packages/atomjs/src/runtime/window-host.mjs
+index 4abc8cb..7e114ea 100755
+--- a/packages/atomjs/src/runtime/window-host.mjs
++++ b/packages/atomjs/src/runtime/window-host.mjs
+@@ -29,7 +29,7 @@ try {
+   ({ Webview, SizeHint } = await import('webview-nodejs'));
+ } catch (error) {
+   console.error('\nAtomJS could not load the system WebView binding.');
+-  console.error('Windows and Linux currently require the webview-nodejs package.');
++  console.error('Linux currently requires the webview-nodejs package.');
+   console.error('Run `atom doctor`, install the platform prerequisites, then install dependencies again.');
+   console.error(error && error.stack ? error.stack : error);
+   process.exit(1);
+diff --git a/packages/atomjs/src/windows-native-host.cjs b/packages/atomjs/src/windows-native-host.cjs
+new file mode 100644
+index 0000000..7a7f10b
+--- /dev/null
++++ b/packages/atomjs/src/windows-native-host.cjs
+@@ -0,0 +1,209 @@
++'use strict';
++
++let singleton = null;
++
++class WindowsNativeHost {
++  constructor() {
++    this.binding = null;
++    this.application = null;
++    this.startPromise = null;
++    this.windows = new Map();
++    this.stopping = false;
++  }
++
++  async ensureStarted() {
++    if (process.platform !== 'win32') {
++      throw new Error('The in-process Windows native host can only run on Windows.');
++    }
++    if (!this.startPromise) {
++      this.startPromise = this._start().catch((error) => {
++        this.startPromise = null;
++        throw error;
++      });
++    }
++    await this.startPromise;
++  }
++
++  async _start() {
++    let binding;
++    try {
++      binding = require('@webviewjs/webview');
++    } catch (error) {
++      const wrapped = new Error([
++        'AtomJS could not load the prebuilt Windows WebView binding.',
++        'Delete node_modules and package-lock.json, then run npm install again.',
++        'CMake and Visual Studio Build Tools are not required.',
++        error && error.message ? error.message : String(error)
++      ].join('\n'));
++      wrapped.cause = error;
++      throw wrapped;
++    }
++
++    this.binding = binding;
++    this.application = new binding.Application();
++    await this.application.whenReady({ interval: 16, ref: true });
++  }
++
++  async createWindow(atomWindow, config) {
++    await this.ensureStarted();
++
++    const parent = config.parentWindowId ? this.windows.get(Number(config.parentWindowId)) : null;
++    const nativeOptions = {
++      title: String(config.title || 'AtomJS App'),
++      width: positive(config.width, 800),
++      height: positive(config.height, 600),
++      resizable: config.resizable !== false,
++      visible: false,
++      decorations: config.frame !== false,
++      alwaysOnTop: Boolean(config.alwaysOnTop),
++      maximizable: config.maximizable !== false,
++      minimizable: config.minimizable !== false,
++      focused: config.focusable !== false,
++      transparent: Boolean(config.transparent),
++      windowsSkipTaskbar: Boolean(config.skipTaskbar),
++      windowsClassName: sanitizeWindowsClass(process.env.ATOM_APP_ID || process.env.ATOM_APP_NAME || config.title)
++    };
++    if (Number.isFinite(Number(config.x))) nativeOptions.x = Math.round(Number(config.x));
++    if (Number.isFinite(Number(config.y))) nativeOptions.y = Math.round(Number(config.y));
++    if (parent && parent.nativeWindow && typeof parent.nativeWindow.getNativeHandle === 'function') {
++      nativeOptions.windowsOwnerWindow = parent.nativeWindow.getNativeHandle();
++    }
++
++    const nativeWindow = this.application.createBrowserWindow(nativeOptions);
++    nativeWindow.setClosable(config.closable !== false);
++    if (Number(config.minWidth) > 0 || Number(config.minHeight) > 0) {
++      nativeWindow.setMinSize(positive(config.minWidth, 1), positive(config.minHeight, 1), true);
++    }
++    if (Number(config.maxWidth) > 0 || Number(config.maxHeight) > 0) {
++      nativeWindow.setMaxSize(positive(config.maxWidth, 100000), positive(config.maxHeight, 100000), true);
++    }
++    if (config.center !== false && !Number.isFinite(Number(config.x)) && !Number.isFinite(Number(config.y))) {
++      nativeWindow.center();
++    }
++
++    const webview = nativeWindow.createWebview({
++      url: String(config.url),
++      preload: String(config.bridgeScript || ''),
++      enableDevtools: Boolean(config.debug),
++      transparent: Boolean(config.transparent)
++    });
++
++    const record = { atomWindow, nativeWindow, webview };
++    this.windows.set(Number(config.windowId), record);
++    this._attachEvents(Number(config.windowId), record);
++
++    if (config.show === false) nativeWindow.hide();
++    else nativeWindow.show();
++  }
++
++  _attachEvents(windowId, record) {
++    const emit = (event) => {
++      if (!this.windows.has(windowId)) return;
++      try { record.atomWindow._handleHostEvent({ ...event, windowId }); } catch {}
++    };
++
++    record.nativeWindow.on('close', () => {
++      try { record.atomWindow._handleHostEvent({ type: 'closed', windowId }); } catch {}
++      this.windows.delete(windowId);
++    });
++    record.nativeWindow.on('focus', () => emit({ type: 'focus' }));
++    record.nativeWindow.on('blur', () => emit({ type: 'blur' }));
++    record.nativeWindow.on('move', (event) => emit({
++      type: 'bounds-changed',
++      reason: 'move',
++      bounds: { x: Number(event.x), y: Number(event.y) }
++    }));
++    record.nativeWindow.on('resize', (event) => emit({
++      type: 'bounds-changed',
++      reason: 'resize',
++      bounds: { width: Number(event.width), height: Number(event.height) }
++    }));
++    record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
++    record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
++    record.webview.on('title-changed', (event) => emit({ type: 'page-title-updated', title: event.title || '' }));
++  }
++
++  send(message) {
++    const record = this.windows.get(Number(message.windowId));
++    if (!record) return false;
++    const win = record.nativeWindow;
++    const view = record.webview;
++
++    switch (message.command) {
++      case 'navigate': view.loadUrl(String(message.url)); return true;
++      case 'show': win.show(); return true;
++      case 'hide': win.hide(); return true;
++      case 'focus': win.focus(); return true;
++      case 'close': win.close(); return true;
++      case 'destroy':
++        this.windows.delete(Number(message.windowId));
++        try { view.dispose(); } catch {}
++        try { win.dispose(); } catch {}
++        return true;
++      case 'set-title': win.setTitle(String(message.title || '')); return true;
++      case 'set-always-on-top': win.setAlwaysOnTop(Boolean(message.value)); return true;
++      case 'set-resizable': win.setResizable(Boolean(message.value)); return true;
++      case 'fullscreen':
++        win.setFullscreen(message.value ? this.binding.FullscreenType.Borderless : null);
++        return true;
++      case 'maximize': win.setMaximized(true); return true;
++      case 'unmaximize': win.setMaximized(false); return true;
++      case 'minimize': win.setMinimized(true); return true;
++      case 'restore':
++        win.setMinimized(false);
++        win.setMaximized(false);
++        win.show();
++        return true;
++      case 'set-bounds': {
++        const bounds = message.bounds || {};
++        if (Number.isFinite(Number(bounds.width)) && Number.isFinite(Number(bounds.height))) {
++          win.setSize(Math.round(Number(bounds.width)), Math.round(Number(bounds.height)), true);
++        }
++        if (Number.isFinite(Number(bounds.x)) && Number.isFinite(Number(bounds.y))) {
++          win.setPosition(Math.round(Number(bounds.x)), Math.round(Number(bounds.y)), true);
++        }
++        return true;
++      }
++      default: return false;
++    }
++  }
++
++  async stop() {
++    if (this.stopping) return;
++    this.stopping = true;
++    for (const record of this.windows.values()) {
++      try { record.webview.dispose(); } catch {}
++      try { record.nativeWindow.dispose(); } catch {}
++    }
++    this.windows.clear();
++    if (this.application) {
++      try { this.application.exit(); } catch {}
++    }
++    this.application = null;
++    this.startPromise = null;
++    this.stopping = false;
++  }
++}
++
++function positive(value, fallback) {
++  const number = Number(value);
++  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
++}
++
++function sanitizeWindowsClass(value) {
++  return String(value || 'AtomJS.App').replace(/[^A-Za-z0-9._-]+/g, '.').slice(0, 120) || 'AtomJS.App';
++}
++
++function getWindowsNativeHost() {
++  if (!singleton) singleton = new WindowsNativeHost();
++  return singleton;
++}
++
++async function stopWindowsNativeHost() {
++  if (!singleton) return;
++  const current = singleton;
++  singleton = null;
++  await current.stop();
++}
++
++module.exports = { WindowsNativeHost, getWindowsNativeHost, stopWindowsNativeHost };
+diff --git a/packages/cli/package.json b/packages/cli/package.json
+index f952c92..d5c2164 100755
+--- a/packages/cli/package.json
++++ b/packages/cli/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@atom-js-org/cli",
+-  "version": "0.5.3-alpha.0",
++  "version": "0.5.3-alpha.1",
+   "description": "CLI for running and building AtomJS desktop applications.",
+   "bin": {
+     "atom": "bin/atom.cjs"
+@@ -14,7 +14,7 @@
+     "LICENSE"
+   ],
+   "engines": {
+-    "node": ">=20.12"
++    "node": ">=24"
+   },
+   "dependencies": {
+     "archiver": "7.0.1",
+diff --git a/packages/cli/src/build.cjs b/packages/cli/src/build.cjs
+index c711d30..13de87f 100755
+--- a/packages/cli/src/build.cjs
++++ b/packages/cli/src/build.cjs
+@@ -18,6 +18,7 @@ const {
+   sanitizeFilename
+ } = require('./utils.cjs');
+ const { resolveElectronCompatibilityRoot } = require('./electron-compat.cjs');
++const cliPackageVersion = require('../package.json').version;
+ 
+ async function buildCommand(targetInput, options = {}) {
+   const target = validateTarget(targetInput);
+@@ -108,7 +109,7 @@ async function localBuild(project, target, options = {}) {
+     }
+ 
+     const manifest = {
+-      atomjsVersion: '0.5.2-alpha.0',
++      atomjsVersion: cliPackageVersion,
+       target,
+       productName,
+       appId: project.config.appId,
+@@ -188,11 +189,18 @@ async function vendorFramework(appDir, project, target) {
+     '@atom-js-org/runtime': 'file:vendor/atomjs',
+     electron: 'file:vendor/electron-compat'
+   };
+-  if (target !== 'macos' && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
++  if (target === 'windows') {
++    pkg.dependencies['@webviewjs/webview'] = '0.4.0';
++    delete pkg.dependencies['webview-nodejs'];
++    if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
++  } else if (target === 'linux' && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
+     pkg.dependencies['webview-nodejs'] = '0.5.0';
++    delete pkg.dependencies['@webviewjs/webview'];
++    if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
++  } else {
++    delete pkg.dependencies['webview-nodejs'];
++    delete pkg.dependencies['@webviewjs/webview'];
+     if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
+-  } else if (pkg.optionalDependencies) {
+-    delete pkg.optionalDependencies['webview-nodejs'];
+   }
+   pkg.overrides = { ...(pkg.overrides || {}), tar: '7.5.20' };
+   delete pkg.devDependencies;
+@@ -228,7 +236,12 @@ async function installProductionDependencies(appDir, skipInstall, target) {
+     throw new Error('The AtomJS Electron compatibility facade was not installed in the staged application.');
+   }
+ 
+-  if (target !== 'macos') {
++  if (target === 'windows') {
++    const bindingPath = path.join(appDir, 'node_modules', '@webviewjs', 'webview');
++    if (!fs.existsSync(bindingPath)) {
++      throw new Error('@webviewjs/webview was not installed. Remove node_modules and package-lock.json, then retry the build.');
++    }
++  } else if (target === 'linux') {
+     const bindingPath = path.join(appDir, 'node_modules', 'webview-nodejs');
+     if (!fs.existsSync(bindingPath) && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
+       throw new Error('webview-nodejs was not installed. Run `atom doctor`, install the platform prerequisites, and retry the build.');
+@@ -455,6 +468,7 @@ process.chdir(appDir);
+ process.env.ATOM_PROJECT_ROOT = appDir;
+ process.env.ATOM_APP_NAME = productName;
+ process.env.ATOM_APP_ID = appId;
++process.title = productName;
+ process.env.ATOM_BUILD = '1';
+ process.env.ATOM_EMBEDDED_RUNTIME = '1';
+ process.env.ATOM_WINDOW_HOST_ENTRY = path.join(appDir, 'vendor', 'atomjs', 'src', 'runtime', 'window-host.mjs');
+diff --git a/packages/cli/src/doctor.cjs b/packages/cli/src/doctor.cjs
+index 14e4fb1..9ae842f 100755
+--- a/packages/cli/src/doctor.cjs
++++ b/packages/cli/src/doctor.cjs
+@@ -7,7 +7,7 @@ const { loadProject, commandExists } = require('./utils.cjs');
+ 
+ async function doctorCommand(options = {}) {
+   const rows = [];
+-  rows.push(check('Node.js >= 20.12', isNodeSupported(), process.version));
++  rows.push(check('Node.js >= 24', isNodeSupported(), process.version));
+   rows.push(check('npm', commandExists(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'])));
+ 
+   if (process.platform === 'win32') {
+@@ -31,6 +31,14 @@ async function doctorCommand(options = {}) {
+ 
+   if (process.platform === 'darwin') {
+     rows.push(check('macOS WKWebView backend', true, 'shared native Cocoa host; no osascript process'));
++  } else if (process.platform === 'win32') {
++    try {
++      const project = loadProject(options.project);
++      const binding = require.resolve('@webviewjs/webview/package.json', { paths: [project.root, process.cwd()] });
++      rows.push(check('Windows prebuilt WebView binding', true, path.dirname(binding)));
++    } catch {
++      rows.push(check('Windows prebuilt WebView binding', false, 'run npm install; CMake and Visual Studio are not required'));
++    }
+   } else {
+     try {
+       const project = loadProject(options.project);
+@@ -57,8 +65,8 @@ async function doctorCommand(options = {}) {
+ }
+ 
+ function isNodeSupported() {
+-  const [major, minor] = process.versions.node.split('.').map(Number);
+-  return major > 20 || (major === 20 && minor >= 12);
++  const [major] = process.versions.node.split('.').map(Number);
++  return major >= 24;
+ }
+ 
+ function check(name, ok, detail = '') {
+diff --git a/packages/cli/src/init.cjs b/packages/cli/src/init.cjs
+index 25c19b0..c04f5ed 100755
+--- a/packages/cli/src/init.cjs
++++ b/packages/cli/src/init.cjs
+@@ -3,6 +3,7 @@
+ const fs = require('node:fs');
+ const path = require('node:path');
+ const fse = require('fs-extra');
++const cliPackageVersion = require('../package.json').version;
+ 
+ async function initCommand(directory, options = {}) {
+   const root = path.resolve(directory);
+@@ -30,14 +31,14 @@ async function initCommand(directory, options = {}) {
+       start: 'atom run build'
+     },
+     dependencies: {
+-      '@atom-js-org/runtime': '0.5.2-alpha.0',
+-      electron: 'npm:@atom-js-org/electron@0.5.2-alpha.0'
+-    },
+-    optionalDependencies: {
+-      'webview-nodejs': '0.5.0'
++      '@atom-js-org/runtime': cliPackageVersion,
++      electron: `npm:@atom-js-org/electron@${cliPackageVersion}`
+     },
+     devDependencies: {
+-      '@atom-js-org/cli': '0.5.2-alpha.0'
++      '@atom-js-org/cli': cliPackageVersion
++    },
++    engines: {
++      node: '>=24'
+     },
+     overrides: {
+       tar: '7.5.20'
+@@ -209,7 +210,7 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+         with:
+-          node-version: 22
++          node-version: 24
+           cache: npm
+       - run: choco install nsis -y
+       - run: npm ci
+@@ -229,7 +230,7 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+         with:
+-          node-version: 22
++          node-version: 24
+           cache: npm
+       - run: npm ci
+         working-directory: \${{ inputs.project }}
+@@ -249,7 +250,7 @@ jobs:
+       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev zenity rpm
+       - uses: actions/setup-node@v4
+         with:
+-          node-version: 22
++          node-version: 24
+           cache: npm
+       - run: |
+           sudo curl -L -o /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+diff --git a/packages/cli/src/run.cjs b/packages/cli/src/run.cjs
+index b201f47..3c86e9a 100755
+--- a/packages/cli/src/run.cjs
++++ b/packages/cli/src/run.cjs
+@@ -3,6 +3,7 @@
+ const path = require('node:path');
+ const fs = require('node:fs');
+ const { spawn } = require('node:child_process');
++const { pathToFileURL } = require('node:url');
+ const { loadProject, hostTarget } = require('./utils.cjs');
+ const { ensureElectronCompatibility } = require('./electron-compat.cjs');
+ 
+@@ -26,26 +27,16 @@ async function runDev(options) {
+   const iconPath = project.config.icon
+     ? path.resolve(project.root, project.config.icon)
+     : null;
+-  const child = spawn(process.execPath, [mainPath], {
+-    cwd: project.root,
+-    env: {
+-      ...process.env,
+-      ATOM_PROJECT_ROOT: project.root,
+-      ATOM_APP_NAME: project.config.productName,
+-      ATOM_APP_ID: project.config.appId,
+-      ...(iconPath && fs.existsSync(iconPath) ? { ATOM_APP_ICON: iconPath } : {}),
+-      ATOM_DEV: '1'
+-    },
+-    stdio: 'inherit'
+-  });
+-
+-  await new Promise((resolve, reject) => {
+-    child.once('error', reject);
+-    child.once('exit', (code, signal) => {
+-      if (code === 0 || signal === 'SIGTERM' || signal === 'SIGINT') resolve();
+-      else reject(new Error(`Application exited with code ${code}`));
+-    });
++  Object.assign(process.env, {
++    ATOM_PROJECT_ROOT: project.root,
++    ATOM_APP_NAME: project.config.productName,
++    ATOM_APP_ID: project.config.appId,
++    ...(iconPath && fs.existsSync(iconPath) ? { ATOM_APP_ICON: iconPath } : {}),
++    ATOM_DEV: '1'
+   });
++  process.title = project.config.productName;
++  process.chdir(project.root);
++  await import(pathToFileURL(mainPath).href);
+ }
+ 
+ async function runBuild(options) {
+diff --git a/packages/electron-compat/package.json b/packages/electron-compat/package.json
+index 20cf6f4..0b0284b 100755
+--- a/packages/electron-compat/package.json
++++ b/packages/electron-compat/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@atom-js-org/electron",
+-  "version": "0.5.3-alpha.0",
++  "version": "0.5.3-alpha.1",
+   "description": "Electron-compatible API facade powered by AtomJS without bundling Electron or a private Chromium runtime.",
+   "main": "index.cjs",
+   "module": "index.mjs",
+@@ -39,10 +39,10 @@
+     "LICENSE"
+   ],
+   "engines": {
+-    "node": ">=20.12"
++    "node": ">=24"
+   },
+   "dependencies": {
+-    "@atom-js-org/runtime": "0.5.3-alpha.0"
++    "@atom-js-org/runtime": "0.5.3-alpha.1"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/tests/api.test.cjs b/tests/api.test.cjs
+index fbb2093..29615f0 100755
+--- a/tests/api.test.cjs
++++ b/tests/api.test.cjs
+@@ -28,7 +28,7 @@ test('preload bridge exposes contextBridge and ipcRenderer compatibility', () =>
+   assert.match(script, /AtomJS system-WebView preload/);
+ });
+ 
+-test('renderer bridge maps Electron-style app regions to one native drag command', () => {
++test('renderer bridge maps Electron-style app regions to native drag-region updates', () => {
+   const script = generateBridgeScript({
+     websocketUrl: 'ws://127.0.0.1:1234/__atom/ws',
+     preloadCode: ''
+@@ -36,7 +36,7 @@ test('renderer bridge maps Electron-style app regions to one native drag command
+   assert.match(script, /-webkit-app-region/);
+   assert.match(script, /data-atom-drag-region/);
+   assert.match(script, /data-atom-no-drag/);
+-  assert.match(script, /command: 'start-window-drag'/);
++  assert.match(script, /command: 'set-window-drag-regions'/);
+   assert.doesNotMatch(script, /setBounds/);
+ });
+ 
+@@ -222,9 +222,9 @@ test('macOS custom title bars use AppKit native window dragging', () => {
+   );
+ 
+   assert.match(source, /performWindowDragWithEvent/);
+-  assert.match(source, /mouseEventWithType:NSEventTypeLeftMouseDown/);
++  assert.match(source, /performWindowDragWithEvent:event/);
+   assert.match(source, /command isEqualToString:@"start-drag"/);
+-  assert.match(bridgeServer, /message\.command === 'start-window-drag'/);
++  assert.match(bridgeServer, /message\.command === 'set-window-drag-regions'/);
+ });
+ 
+ test('macOS host maps modal, title-bar and visual options to AppKit', () => {
+@@ -244,3 +244,14 @@ test('macOS host maps modal, title-bar and visual options to AppKit', () => {
+   assert.match(source, /set-opacity/);
+   assert.match(source, /set-resizable/);
+ });
++
++
++test('Windows uses one in-process prebuilt native host instead of one Node helper per window', () => {
++  const browserWindow = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'browser-window.cjs'), 'utf8');
++  const windowsHost = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'windows-native-host.cjs'), 'utf8');
++
++  assert.match(browserWindow, /process\.platform === 'win32'[\s\S]*getWindowsNativeHost\(\)/);
++  assert.match(windowsHost, /require\('@webviewjs\/webview'\)/);
++  assert.match(windowsHost, /new binding\.Application/);
++  assert.doesNotMatch(windowsHost, /child_process|spawn\(/);
++});
+diff --git a/tests/cli.test.cjs b/tests/cli.test.cjs
+index 875e1fc..b6108eb 100755
+--- a/tests/cli.test.cjs
++++ b/tests/cli.test.cjs
+@@ -293,3 +293,13 @@ test('configuration schema exposes installer, app bundle and Linux package custo
+   assert.ok(build.linux.properties.rpm);
+   assert.ok(build.linux.properties.rpmDependencies);
+ });
++
++
++test('Windows builds use a prebuilt binding and dev mode does not spawn a second Node process', () => {
++  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
++  const runSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'run.cjs'), 'utf8');
++
++  assert.match(buildSource, /target === 'windows'[\s\S]*@webviewjs\/webview/);
++  assert.match(runSource, /await import\(pathToFileURL\(mainPath\)\.href\)/);
++  assert.doesNotMatch(runSource, /spawn\(process\.execPath, \[mainPath\]/);
++});
+diff --git a/tests/fixtures/macos-smoke/atom.config.json b/tests/fixtures/macos-smoke/atom.config.json
+new file mode 100644
+index 0000000..c5161f1
+--- /dev/null
++++ b/tests/fixtures/macos-smoke/atom.config.json
+@@ -0,0 +1,12 @@
++{
++  "appId": "org.atomjs.smoke",
++  "productName": "AtomJS Smoke",
++  "main": "src/main.js",
++  "build": {
++    "macos": {
++      "dmg": {
++        "enabled": false
++      }
++    }
++  }
++}
+diff --git a/tests/fixtures/macos-smoke/package.json b/tests/fixtures/macos-smoke/package.json
+new file mode 100644
+index 0000000..ec3d24b
+--- /dev/null
++++ b/tests/fixtures/macos-smoke/package.json
+@@ -0,0 +1,9 @@
++{
++  "name": "atomjs-smoke",
++  "version": "1.0.0",
++  "private": true,
++  "main": "src/main.js",
++  "engines": {
++    "node": ">=24"
++  }
++}
+diff --git a/tests/fixtures/macos-smoke/src/index.html b/tests/fixtures/macos-smoke/src/index.html
+new file mode 100644
+index 0000000..6eb5c2d
+--- /dev/null
++++ b/tests/fixtures/macos-smoke/src/index.html
+@@ -0,0 +1,5 @@
++<!doctype html>
++<html lang="en">
++  <head><meta charset="utf-8"><title>AtomJS Smoke</title></head>
++  <body><h1>AtomJS smoke build</h1></body>
++</html>
+diff --git a/tests/fixtures/macos-smoke/src/main.js b/tests/fixtures/macos-smoke/src/main.js
+new file mode 100644
+index 0000000..48268ef
+--- /dev/null
++++ b/tests/fixtures/macos-smoke/src/main.js
+@@ -0,0 +1,11 @@
++'use strict';
++
++const path = require('node:path');
++const { app, BrowserWindow } = require('electron');
++
++app.whenReady().then(() => {
++  const win = new BrowserWindow({ width: 640, height: 420, title: 'AtomJS Smoke' });
++  win.loadFile(path.join(__dirname, 'index.html'));
++});
++
++app.on('window-all-closed', () => app.quit());

@@ -10,6 +10,7 @@ const app = require('./app.cjs');
 const { WebContents } = require('./web-contents.cjs');
 const { generateBridgeScript } = require('./bridge-script.cjs');
 const { getNativeHost } = require('./native-host.cjs');
+const { getWindowsNativeHost } = require('./windows-native-host.cjs');
 
 class BrowserWindow extends EventEmitter {
   constructor(options = {}) {
@@ -136,6 +137,10 @@ class BrowserWindow extends EventEmitter {
       this._nativeHost = getNativeHost(app.getName());
       this._hostAttached = true;
       await this._nativeHost.createWindow(this, config);
+    } else if (process.platform === 'win32') {
+      this._nativeHost = getWindowsNativeHost();
+      this._hostAttached = true;
+      await this._nativeHost.createWindow(this, config);
     } else {
       await this._startLegacyHost(config);
     }
@@ -213,8 +218,7 @@ class BrowserWindow extends EventEmitter {
 
   _sendHostCommand(command) {
     if (this._nativeHost) {
-      this._nativeHost.send({ ...command, windowId: this.id });
-      return true;
+      return this._nativeHost.send({ ...command, windowId: this.id }) !== false;
     }
     return false;
   }

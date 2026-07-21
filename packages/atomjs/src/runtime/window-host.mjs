@@ -29,7 +29,7 @@ try {
   ({ Webview, SizeHint } = await import('webview-nodejs'));
 } catch (error) {
   console.error('\nAtomJS could not load the system WebView binding.');
-  console.error('Windows and Linux currently require the webview-nodejs package.');
+  console.error('Linux currently requires the webview-nodejs package.');
   console.error('Run `atom doctor`, install the platform prerequisites, then install dependencies again.');
   console.error(error && error.stack ? error.stack : error);
   process.exit(1);

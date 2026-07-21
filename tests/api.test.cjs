@@ -28,7 +28,7 @@ test('preload bridge exposes contextBridge and ipcRenderer compatibility', () =>
   assert.match(script, /AtomJS system-WebView preload/);
 });
 
-test('renderer bridge maps Electron-style app regions to one native drag command', () => {
+test('renderer bridge maps Electron-style app regions to native drag-region updates', () => {
   const script = generateBridgeScript({
     websocketUrl: 'ws://127.0.0.1:1234/__atom/ws',
     preloadCode: ''
@@ -36,7 +36,7 @@ test('renderer bridge maps Electron-style app regions to one native drag command
   assert.match(script, /-webkit-app-region/);
   assert.match(script, /data-atom-drag-region/);
   assert.match(script, /data-atom-no-drag/);
-  assert.match(script, /command: 'start-window-drag'/);
+  assert.match(script, /command: 'set-window-drag-regions'/);
   assert.doesNotMatch(script, /setBounds/);
 });
 
@@ -222,9 +222,9 @@ test('macOS custom title bars use AppKit native window dragging', () => {
   );
 
   assert.match(source, /performWindowDragWithEvent/);
-  assert.match(source, /mouseEventWithType:NSEventTypeLeftMouseDown/);
+  assert.match(source, /performWindowDragWithEvent:event/);
   assert.match(source, /command isEqualToString:@"start-drag"/);
-  assert.match(bridgeServer, /message\.command === 'start-window-drag'/);
+  assert.match(bridgeServer, /message\.command === 'set-window-drag-regions'/);
 });
 
 test('macOS host maps modal, title-bar and visual options to AppKit', () => {
@@ -243,4 +243,15 @@ test('macOS host maps modal, title-bar and visual options to AppKit', () => {
   assert.match(source, /set-always-on-top/);
   assert.match(source, /set-opacity/);
   assert.match(source, /set-resizable/);
+});
+
+
+test('Windows uses one in-process prebuilt native host instead of one Node helper per window', () => {
+  const browserWindow = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'browser-window.cjs'), 'utf8');
+  const windowsHost = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'windows-native-host.cjs'), 'utf8');
+
+  assert.match(browserWindow, /process\.platform === 'win32'[\s\S]*getWindowsNativeHost\(\)/);
+  assert.match(windowsHost, /require\('@webviewjs\/webview'\)/);
+  assert.match(windowsHost, /new binding\.Application/);
+  assert.doesNotMatch(windowsHost, /child_process|spawn\(/);
 });

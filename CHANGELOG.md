@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3-alpha.1
+
+- Replaced the Windows `webview-nodejs` build-time dependency with the prebuilt `@webviewjs/webview` backend.
+- Runs Windows native windows in the AtomJS main process instead of one Node helper process per window.
+- Runs `atom run dev` in-process, removing the extra CLI parent process.
+- Keeps short temporary staging for Windows builds, so projects no longer need to be placed under `C:\\`.
+
+
 ## 0.5.2-alpha.0
 
 - Added Electron-compatible `-webkit-app-region: drag` handling for custom title bars.

@@ -1,0 +1,12 @@
+{
+  "appId": "org.atomjs.smoke",
+  "productName": "AtomJS Smoke",
+  "main": "src/main.js",
+  "build": {
+    "macos": {
+      "dmg": {
+        "enabled": false
+      }
+    }
+  }
+}

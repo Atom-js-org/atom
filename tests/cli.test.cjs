@@ -293,3 +293,13 @@ test('configuration schema exposes installer, app bundle and Linux package custo
   assert.ok(build.linux.properties.rpm);
   assert.ok(build.linux.properties.rpmDependencies);
 });
+
+
+test('Windows builds use a prebuilt binding and dev mode does not spawn a second Node process', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  const runSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'run.cjs'), 'utf8');
+
+  assert.match(buildSource, /target === 'windows'[\s\S]*@webviewjs\/webview/);
+  assert.match(runSource, /await import\(pathToFileURL\(mainPath\)\.href\)/);
+  assert.doesNotMatch(runSource, /spawn\(process\.execPath, \[mainPath\]/);
+});

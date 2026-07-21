@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const fse = require('fs-extra');
+const cliPackageVersion = require('../package.json').version;
 
 async function initCommand(directory, options = {}) {
   const root = path.resolve(directory);
@@ -30,14 +31,14 @@ async function initCommand(directory, options = {}) {
       start: 'atom run build'
     },
     dependencies: {
-      '@atom-js-org/runtime': '0.5.2-alpha.0',
-      electron: 'npm:@atom-js-org/electron@0.5.2-alpha.0'
-    },
-    optionalDependencies: {
-      'webview-nodejs': '0.5.0'
+      '@atom-js-org/runtime': cliPackageVersion,
+      electron: `npm:@atom-js-org/electron@${cliPackageVersion}`
     },
     devDependencies: {
-      '@atom-js-org/cli': '0.5.2-alpha.0'
+      '@atom-js-org/cli': cliPackageVersion
+    },
+    engines: {
+      node: '>=24'
     },
     overrides: {
       tar: '7.5.20'
@@ -209,7 +210,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: choco install nsis -y
       - run: npm ci
@@ -229,7 +230,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
         working-directory: \${{ inputs.project }}
@@ -249,7 +250,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev zenity rpm
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: |
           sudo curl -L -o /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage

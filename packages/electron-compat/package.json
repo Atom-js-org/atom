@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/electron",
-  "version": "0.5.3-alpha.0",
+  "version": "0.5.3-alpha.1",
   "description": "Electron-compatible API facade powered by AtomJS without bundling Electron or a private Chromium runtime.",
   "main": "index.cjs",
   "module": "index.mjs",
@@ -39,10 +39,10 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20.12"
+    "node": ">=24"
   },
   "dependencies": {
-    "@atom-js-org/runtime": "0.5.3-alpha.0"
+    "@atom-js-org/runtime": "0.5.3-alpha.1"
   },
   "repository": {
     "type": "git",

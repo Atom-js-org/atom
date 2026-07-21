@@ -8,7 +8,7 @@ atom build macos
 atom build linux
 ```
 
-A local build must match the host operating system. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
+A local build must match the host operating system. Windows builds no longer require CMake or Visual Studio Build Tools; the WebView binding is downloaded as a prebuilt platform package. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
 
 ## Configuration
 
@@ -88,7 +88,7 @@ build/windows/
 └── manifest.json
 ```
 
-The final executable uses the Windows GUI subsystem, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
+The final executable uses the Windows GUI subsystem and keeps the AtomJS main process and native window host in one process, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
 
 ## macOS output
 

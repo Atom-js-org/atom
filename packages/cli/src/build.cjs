@@ -18,6 +18,7 @@ const {
   sanitizeFilename
 } = require('./utils.cjs');
 const { resolveElectronCompatibilityRoot } = require('./electron-compat.cjs');
+const cliPackageVersion = require('../package.json').version;
 
 async function buildCommand(targetInput, options = {}) {
   const target = validateTarget(targetInput);
@@ -108,7 +109,7 @@ async function localBuild(project, target, options = {}) {
     }
 
     const manifest = {
-      atomjsVersion: '0.5.2-alpha.0',
+      atomjsVersion: cliPackageVersion,
       target,
       productName,
       appId: project.config.appId,
@@ -188,11 +189,18 @@ async function vendorFramework(appDir, project, target) {
     '@atom-js-org/runtime': 'file:vendor/atomjs',
     electron: 'file:vendor/electron-compat'
   };
-  if (target !== 'macos' && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
-    pkg.dependencies['webview-nodejs'] = '0.5.0';
+  if (target === 'windows') {
+    pkg.dependencies['@webviewjs/webview'] = '0.4.0';
+    delete pkg.dependencies['webview-nodejs'];
     if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
-  } else if (pkg.optionalDependencies) {
-    delete pkg.optionalDependencies['webview-nodejs'];
+  } else if (target === 'linux' && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
+    pkg.dependencies['webview-nodejs'] = '0.5.0';
+    delete pkg.dependencies['@webviewjs/webview'];
+    if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
+  } else {
+    delete pkg.dependencies['webview-nodejs'];
+    delete pkg.dependencies['@webviewjs/webview'];
+    if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
   }
   pkg.overrides = { ...(pkg.overrides || {}), tar: '7.5.20' };
   delete pkg.devDependencies;
@@ -228,7 +236,12 @@ async function installProductionDependencies(appDir, skipInstall, target) {
     throw new Error('The AtomJS Electron compatibility facade was not installed in the staged application.');
   }
 
-  if (target !== 'macos') {
+  if (target === 'windows') {
+    const bindingPath = path.join(appDir, 'node_modules', '@webviewjs', 'webview');
+    if (!fs.existsSync(bindingPath)) {
+      throw new Error('@webviewjs/webview was not installed. Remove node_modules and package-lock.json, then retry the build.');
+    }
+  } else if (target === 'linux') {
     const bindingPath = path.join(appDir, 'node_modules', 'webview-nodejs');
     if (!fs.existsSync(bindingPath) && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
       throw new Error('webview-nodejs was not installed. Run `atom doctor`, install the platform prerequisites, and retry the build.');
@@ -455,6 +468,7 @@ process.chdir(appDir);
 process.env.ATOM_PROJECT_ROOT = appDir;
 process.env.ATOM_APP_NAME = productName;
 process.env.ATOM_APP_ID = appId;
+process.title = productName;
 process.env.ATOM_BUILD = '1';
 process.env.ATOM_EMBEDDED_RUNTIME = '1';
 process.env.ATOM_WINDOW_HOST_ENTRY = path.join(appDir, 'vendor', 'atomjs', 'src', 'runtime', 'window-host.mjs');

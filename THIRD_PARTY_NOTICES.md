@@ -6,6 +6,7 @@ AtomJS is an original implementation inspired by Electron's developer-facing pro
 
 AtomJS uses external packages rather than copying their source into this repository:
 
+- `@webviewjs/webview`, MIT: https://github.com/webview/webview
 - `webview-nodejs`, Apache-2.0: https://github.com/Winterreisender/webview-nodejs
 - `webview`, MIT: https://github.com/webview/webview
 - `ws`, MIT: https://github.com/websockets/ws

@@ -7,7 +7,7 @@ const { loadProject, commandExists } = require('./utils.cjs');
 
 async function doctorCommand(options = {}) {
   const rows = [];
-  rows.push(check('Node.js >= 20.12', isNodeSupported(), process.version));
+  rows.push(check('Node.js >= 24', isNodeSupported(), process.version));
   rows.push(check('npm', commandExists(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'])));
 
   if (process.platform === 'win32') {
@@ -31,6 +31,14 @@ async function doctorCommand(options = {}) {
 
   if (process.platform === 'darwin') {
     rows.push(check('macOS WKWebView backend', true, 'shared native Cocoa host; no osascript process'));
+  } else if (process.platform === 'win32') {
+    try {
+      const project = loadProject(options.project);
+      const binding = require.resolve('@webviewjs/webview/package.json', { paths: [project.root, process.cwd()] });
+      rows.push(check('Windows prebuilt WebView binding', true, path.dirname(binding)));
+    } catch {
+      rows.push(check('Windows prebuilt WebView binding', false, 'run npm install; CMake and Visual Studio are not required'));
+    }
   } else {
     try {
       const project = loadProject(options.project);
@@ -57,8 +65,8 @@ async function doctorCommand(options = {}) {
 }
 
 function isNodeSupported() {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  return major > 20 || (major === 20 && minor >= 12);
+  const [major] = process.versions.node.split('.').map(Number);
+  return major >= 24;
 }
 
 function check(name, ok, detail = '') {

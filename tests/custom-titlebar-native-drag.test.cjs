@@ -21,6 +21,18 @@ test('custom title bars publish layout regions instead of relaying pointer movem
   assert.doesNotMatch(bridge, /pointermove[\s\S]*set-bounds/);
 });
 
+
+test('Windows custom title bars use the native Win32 move loop', () => {
+  const host = source('packages/atomjs/src/windows-native-host.cjs');
+  const nativeDrag = source('packages/atomjs/src/windows-native-drag.cjs');
+
+  assert.match(host, /_startNativeWindowDrag/);
+  assert.match(nativeDrag, /ReleaseCapture/);
+  assert.match(nativeDrag, /SendMessageW/);
+  assert.match(nativeDrag, /WM_NCLBUTTONDOWN/);
+  assert.doesNotMatch(host, /_continueWindowDrag|setPosition\([\s\S]*offsetX/);
+});
+
 test('macOS custom title bars use the original AppKit mouse event', () => {
   const host = source('packages/atomjs/src/runtime/macos-native-host.m');
 

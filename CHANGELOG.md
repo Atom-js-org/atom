@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3-alpha.3
+
+- Replaces JavaScript-driven Windows window movement with the native Win32 move loop (`ReleaseCapture` + `WM_NCLBUTTONDOWN/HTCAPTION`).
+- Makes custom title-bar dragging use Windows snapping, monitor/DPI transitions and maximized-window restore behavior instead of repeated `setPosition()` calls.
+- Matches the Windows title-bar double-click threshold to the user's system settings and keeps `no-drag` regions clickable.
+
 ## 0.5.3-alpha.2
 
 - Uses a writable per-application WebView2 data directory on Windows, preventing development startup failures caused by access-denied user-data folders.

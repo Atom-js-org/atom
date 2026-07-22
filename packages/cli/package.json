@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/cli",
-  "version": "0.5.3-alpha.2",
+  "version": "0.5.3-alpha.3",
   "description": "CLI for running and building AtomJS desktop applications.",
   "bin": {
     "atom": "bin/atom.cjs"

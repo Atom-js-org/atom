@@ -329,6 +329,9 @@ test('Windows builds use a prebuilt binding and dev mode does not spawn a second
   const runSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'run.cjs'), 'utf8');
 
   assert.match(buildSource, /target === 'windows'[\s\S]*@webviewjs\/webview/);
+  assert.match(buildSource, /pkg\.dependencies\.koffi = '3\.1\.2'/);
+  assert.match(buildSource, /prebuilt Win32 FFI package for native window movement/);
+  assert.match(buildSource, /require\('koffi'\)/);
   assert.match(runSource, /await import\(pathToFileURL\(mainPath\)\.href\)/);
   assert.doesNotMatch(runSource, /spawn\(process\.execPath, \[mainPath\]/);
 });

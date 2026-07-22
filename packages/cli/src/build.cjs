@@ -222,15 +222,18 @@ async function vendorFramework(appDir, project, target) {
   };
   if (target === 'windows') {
     pkg.dependencies['@webviewjs/webview'] = '0.4.0';
+    pkg.dependencies.koffi = '3.1.2';
     delete pkg.dependencies['webview-nodejs'];
     if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
   } else if (target === 'linux' && process.env.ATOM_SKIP_WEBVIEW_CHECK !== '1') {
     pkg.dependencies['webview-nodejs'] = '0.5.0';
     delete pkg.dependencies['@webviewjs/webview'];
+    delete pkg.dependencies.koffi;
     if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
   } else {
     delete pkg.dependencies['webview-nodejs'];
     delete pkg.dependencies['@webviewjs/webview'];
+    delete pkg.dependencies.koffi;
     if (pkg.optionalDependencies) delete pkg.optionalDependencies['webview-nodejs'];
   }
   pkg.overrides = { ...(pkg.overrides || {}), tar: '7.5.20' };
@@ -271,6 +274,15 @@ async function installProductionDependencies(appDir, skipInstall, target) {
     const bindingPath = path.join(appDir, 'node_modules', '@webviewjs', 'webview');
     if (!fs.existsSync(bindingPath)) {
       throw new Error('@webviewjs/webview was not installed. Remove node_modules and package-lock.json, then retry the build.');
+    }
+    const nativeDragPath = path.join(appDir, 'node_modules', 'koffi');
+    if (!fs.existsSync(nativeDragPath)) {
+      throw new Error('koffi was not installed. AtomJS requires its prebuilt Win32 FFI package for native window movement.');
+    }
+    try {
+      await run(process.execPath, ['-e', "require('koffi');"], { cwd: appDir });
+    } catch (error) {
+      throw new Error(`The prebuilt Koffi package could not load for this Windows architecture: ${error.message}`);
     }
   } else if (target === 'linux') {
     const bindingPath = path.join(appDir, 'node_modules', 'webview-nodejs');

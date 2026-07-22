@@ -1,9 +1,9 @@
 # Validation record
 
-Validated for 0.5.3-alpha.2:
+Validated for 0.5.3-alpha.3:
 
 - Node.js API and packaging tests cover Electron facade resolution, IPC, repeated OAuth navigation, parent/modal windows and customization options.
-- Windows source checks cover GUI-subsystem output, PE signature handling, the prebuilt in-process host, native owner assignment and foreground activation.
+- Windows source checks cover GUI-subsystem output, PE signature handling, the prebuilt in-process host, native owner assignment, foreground activation and native Win32 title-bar movement.
 - Windows packaging checks cover executable metadata, ICO resources and customizable NSIS generation.
 - macOS source checks cover shared AppKit lifecycle, sheets/child windows, title-bar options, app identity, icon handling and code signing.
 - macOS packaging keeps signing and DMG generation on local temporary storage before copying artifacts to external volumes.

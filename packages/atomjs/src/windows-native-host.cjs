@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { getWindowsNativeDragApi } = require('./windows-native-drag.cjs');
 
 let singleton = null;
 
@@ -114,6 +115,7 @@ class WindowsNativeHost {
     });
 
     const record = {
+      windowId: Number(config.windowId),
       atomWindow,
       nativeWindow,
       webview,
@@ -122,8 +124,6 @@ class WindowsNativeHost {
         width: positive(config.width, 800),
         height: positive(config.height, 600)
       },
-      lastCursorPhysical: null,
-      dragState: null,
       lastDragClick: null
     };
     this.windows.set(Number(config.windowId), record);
@@ -144,10 +144,7 @@ class WindowsNativeHost {
       this.windows.delete(windowId);
     });
     record.nativeWindow.on('focus', () => emit({ type: 'focus' }));
-    record.nativeWindow.on('blur', () => {
-      record.dragState = null;
-      emit({ type: 'blur' });
-    });
+    record.nativeWindow.on('blur', () => emit({ type: 'blur' }));
     record.nativeWindow.on('move', (event) => {
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
@@ -164,60 +161,39 @@ class WindowsNativeHost {
         bounds: { width: Number(event.width) / scale, height: Number(event.height) / scale }
       });
     });
-    record.nativeWindow.on('mouse-move', (event) => {
-      const point = physicalPoint(event);
-      if (!point) return;
-      record.lastCursorPhysical = point;
-      if (record.dragState) this._continueWindowDrag(record, point);
-    });
     record.nativeWindow.on('mouse-down', (event) => {
       if (Number(event.button) !== 0) return;
       const point = physicalPoint(event);
-      if (!point) return;
-      record.lastCursorPhysical = point;
-      if (!isDraggablePoint(record, point)) return;
-
-      const now = Date.now();
-      const previous = record.lastDragClick;
-      record.lastDragClick = { time: now, x: point.x, y: point.y };
-      if (previous && now - previous.time <= 450 && distanceSquared(previous, point) <= 64) {
-        record.dragState = null;
-        record.lastDragClick = null;
-        try { record.nativeWindow.setMaximized(!record.nativeWindow.isMaximized()); } catch {}
-        return;
-      }
-
-      this._beginWindowDrag(record, point);
-    });
-    record.nativeWindow.on('mouse-up', (event) => {
-      if (Number(event.button) === 0) record.dragState = null;
+      if (!point || !isDraggablePoint(record, point)) return;
+      this._startNativeWindowDrag(record, point);
     });
     record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
     record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
     record.webview.on('title-changed', (event) => emit({ type: 'page-title-updated', title: event.title || '' }));
   }
 
-  _beginWindowDrag(record, point) {
-    if (!point) return false;
-    record.dragState = { offsetX: point.x, offsetY: point.y };
-    return true;
-  }
+  _startNativeWindowDrag(record, point = null) {
+    const nativeDrag = getWindowsNativeDragApi();
+    if (!nativeDrag) return false;
 
-  _continueWindowDrag(record, point) {
-    const state = record.dragState;
-    if (!state) return;
-    try {
-      const current = record.nativeWindow.getPosition(false);
-      const globalX = Number(current.x) + point.x;
-      const globalY = Number(current.y) + point.y;
-      record.nativeWindow.setPosition(
-        Math.round(globalX - state.offsetX),
-        Math.round(globalY - state.offsetY),
-        false
-      );
-    } catch {
-      record.dragState = null;
+    if (point && isSystemDoubleClick(record, point, nativeDrag.doubleClickSettings())) {
+      record.lastDragClick = null;
+      try { record.nativeWindow.setMaximized(!record.nativeWindow.isMaximized()); } catch {}
+      return true;
     }
+
+    const before = readPhysicalWindowPosition(record.nativeWindow);
+    const started = nativeDrag.startWindowDrag(record.nativeWindow);
+    if (!started) return false;
+
+    // SendMessageW returns when the native move loop ends. A real movement must
+    // not become the first half of a later title-bar double click.
+    const after = readPhysicalWindowPosition(record.nativeWindow);
+    if (!samePhysicalPosition(before, after)) {
+      record.lastDragClick = null;
+      emitFinalWindowBounds(record);
+    }
+    return true;
   }
 
   send(message) {
@@ -256,7 +232,7 @@ class WindowsNativeHost {
         record.dragViewport = normalizeViewport(message.viewport, win);
         return true;
       case 'start-drag':
-        return this._beginWindowDrag(record, record.lastCursorPhysical);
+        return this._startNativeWindowDrag(record);
       case 'set-bounds': {
         const bounds = message.bounds || {};
         if (Number.isFinite(Number(bounds.width)) && Number.isFinite(Number(bounds.height))) {
@@ -363,10 +339,54 @@ function isDraggablePoint(record, physical) {
   return draggable;
 }
 
-function distanceSquared(a, b) {
-  const dx = Number(a.x) - Number(b.x);
-  const dy = Number(a.y) - Number(b.y);
-  return (dx * dx) + (dy * dy);
+function isSystemDoubleClick(record, point, settings) {
+  const now = Date.now();
+  const previous = record.lastDragClick;
+  record.lastDragClick = { time: now, x: point.x, y: point.y };
+  if (!previous) return false;
+
+  const halfWidth = Math.max(1, Number(settings && settings.width) / 2);
+  const halfHeight = Math.max(1, Number(settings && settings.height) / 2);
+  return now - previous.time <= Number(settings && settings.time || 500) &&
+    Math.abs(Number(previous.x) - Number(point.x)) <= halfWidth &&
+    Math.abs(Number(previous.y) - Number(point.y)) <= halfHeight;
+}
+
+function readPhysicalWindowPosition(win) {
+  try {
+    const position = win.getPosition(false);
+    const x = Number(position && position.x);
+    const y = Number(position && position.y);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  } catch {
+    return null;
+  }
+}
+
+
+function emitFinalWindowBounds(record) {
+  try {
+    const win = record.nativeWindow;
+    const scale = safeScaleFactor(win);
+    const position = win.getPosition(false);
+    const size = win.getInnerSize(true);
+    record.atomWindow._handleHostEvent({
+      type: 'bounds-changed',
+      reason: 'move',
+      windowId: record.windowId,
+      bounds: {
+        x: Number(position.x) / scale,
+        y: Number(position.y) / scale,
+        width: Number(size.width),
+        height: Number(size.height)
+      }
+    });
+  } catch {}
+}
+
+function samePhysicalPosition(a, b) {
+  if (!a || !b) return true;
+  return Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1;
 }
 
 function resolveWritableWebViewDataDirectory() {
@@ -422,5 +442,8 @@ module.exports = {
   stopWindowsNativeHost,
   isDraggablePoint,
   normalizeDragRegions,
-  resolveWritableWebViewDataDirectory
+  resolveWritableWebViewDataDirectory,
+  isSystemDoubleClick,
+  emitFinalWindowBounds,
+  samePhysicalPosition
 };

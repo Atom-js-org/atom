@@ -9,6 +9,7 @@ AtomJS uses external packages rather than copying their source into this reposit
 - `@webviewjs/webview`, MIT: https://github.com/webview/webview
 - `webview-nodejs`, Apache-2.0: https://github.com/Winterreisender/webview-nodejs
 - `webview`, MIT: https://github.com/webview/webview
+- `koffi`, MIT: https://github.com/Koromix/koffi
 - `ws`, MIT: https://github.com/websockets/ws
 - `commander`, MIT: https://github.com/tj/commander.js
 - `fs-extra`, MIT: https://github.com/jprichardson/node-fs-extra

@@ -270,7 +270,7 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(windowsHost, /getWindowsNativeDragApi\(\)/);
   assert.match(windowsDrag, /WM_NCLBUTTONDOWN/);
   assert.match(windowsDrag, /ReleaseCapture/);
-  assert.match(windowsDrag, /SendMessageW/);
+  assert.match(windowsDrag, /PostMessageW/);
   assert.doesNotMatch(windowsHost, /_continueWindowDrag|globalX|offsetX/);
   assert.doesNotMatch(windowsHost, /child_process|spawn\(/);
 });

@@ -18,10 +18,10 @@ class WindowsNativeDragApi {
     const user32 = koffi.load('user32.dll');
     const pointType = koffi.struct('ATOMJS_WIN32_POINT', { x: 'long', y: 'long' });
     this.releaseCapture = user32.func('__stdcall', 'ReleaseCapture', 'bool', []);
-    this.sendMessageW = user32.func(
+    this.postMessageW = user32.func(
       '__stdcall',
-      'SendMessageW',
-      'intptr_t',
+      'PostMessageW',
+      'bool',
       ['void *', 'uint32_t', 'uintptr_t', 'intptr_t']
     );
     this.getAsyncKeyState = user32.func('__stdcall', 'GetAsyncKeyState', 'int16_t', ['int']);
@@ -46,15 +46,15 @@ class WindowsNativeDragApi {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n || !this.isLeftButtonDown()) return false;
 
-    // Hand control to DefWindowProc instead of moving the window from JavaScript.
-    // This enters Windows' normal move loop, including snapping, monitor/DPI
-    // transitions and maximized-window restore behavior.
+    // Queue the standard non-client title-bar press and return immediately.
+    // PostMessageW is important here: SendMessageW blocks Node while Windows runs
+    // its modal move loop, which causes frozen rendering and erratic input. Tao's
+    // own Window::drag_window() follows the same asynchronous Win32 path.
     const cursor = {};
     const cursorPosition = this.getCursorPos(cursor) ? packScreenPoint(cursor.x, cursor.y) : 0n;
 
     this.releaseCapture();
-    this.sendMessageW(handle, WM_NCLBUTTONDOWN, HTCAPTION, cursorPosition);
-    return true;
+    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, HTCAPTION, cursorPosition));
   }
 }
 

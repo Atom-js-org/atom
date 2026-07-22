@@ -8,17 +8,13 @@ const {
   packScreenPoint,
   constants
 } = require('../packages/atomjs/src/windows-native-drag.cjs');
-const {
-  isSystemDoubleClick,
-  samePhysicalPosition,
-  emitFinalWindowBounds
-} = require('../packages/atomjs/src/windows-native-host.cjs');
+const { isSystemDoubleClick } = require('../packages/atomjs/src/windows-native-host.cjs');
 
 function fakeKoffi(overrides = {}) {
   const calls = [];
   const functions = {
     ReleaseCapture: () => { calls.push(['ReleaseCapture']); return true; },
-    SendMessageW: (...args) => { calls.push(['SendMessageW', ...args]); return 0; },
+    PostMessageW: (...args) => { calls.push(['PostMessageW', ...args]); return true; },
     GetAsyncKeyState: () => 0x8000,
     GetCursorPos: (point) => { point.x = -120; point.y = 85; return true; },
     GetDoubleClickTime: () => 500,
@@ -52,7 +48,7 @@ test('Windows drag hands the HWND to the native Windows move loop', () => {
   assert.equal(api.startWindowDrag(win), true);
   assert.deepEqual(fake.calls, [
     ['ReleaseCapture'],
-    ['SendMessageW', 0x1234n, constants.WM_NCLBUTTONDOWN, constants.HTCAPTION, packScreenPoint(-120, 85)]
+    ['PostMessageW', 0x1234n, constants.WM_NCLBUTTONDOWN, constants.HTCAPTION, packScreenPoint(-120, 85)]
   ]);
 });
 
@@ -86,29 +82,4 @@ test('Windows title-bar double click follows system time and rectangle settings'
 
   record.lastDragClick = { time: Date.now() - 100, x: 100, y: 50 };
   assert.equal(isSystemDoubleClick(record, { x: 106, y: 50 }, settings), false);
-});
-
-test('native drag movement detection ignores one-pixel native rounding', () => {
-  assert.equal(samePhysicalPosition({ x: 10, y: 20 }, { x: 11, y: 19 }), true);
-  assert.equal(samePhysicalPosition({ x: 10, y: 20 }, { x: 12, y: 20 }), false);
-});
-
-test('native drag re-synchronizes logical bounds after the Windows move loop', () => {
-  const events = [];
-  emitFinalWindowBounds({
-    windowId: 7,
-    atomWindow: { _handleHostEvent: (event) => events.push(event) },
-    nativeWindow: {
-      scaleFactor: () => 2,
-      getPosition: () => ({ x: -400, y: 100 }),
-      getInnerSize: () => ({ width: 900, height: 600 })
-    }
-  });
-
-  assert.deepEqual(events, [{
-    type: 'bounds-changed',
-    reason: 'move',
-    windowId: 7,
-    bounds: { x: -200, y: 50, width: 900, height: 600 }
-  }]);
 });

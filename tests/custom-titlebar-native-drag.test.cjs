@@ -28,7 +28,7 @@ test('Windows custom title bars use the native Win32 move loop', () => {
 
   assert.match(host, /_startNativeWindowDrag/);
   assert.match(nativeDrag, /ReleaseCapture/);
-  assert.match(nativeDrag, /SendMessageW/);
+  assert.match(nativeDrag, /PostMessageW/);
   assert.match(nativeDrag, /WM_NCLBUTTONDOWN/);
   assert.doesNotMatch(host, /_continueWindowDrag|setPosition\([\s\S]*offsetX/);
 });

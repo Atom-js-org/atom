@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3-alpha.4
+
+- Fixed Windows custom-titlebar dragging so the Win32 move loop is queued asynchronously with `PostMessageW` instead of blocking Node with `SendMessageW`.
+- Kept BrowserWindow bounds synchronized through native move events while Windows owns the pointer.
+- Prevented small real drags from being reused as the first click of a later title-bar double click.
+
 ## 0.5.3-alpha.3
 
 - Replaces JavaScript-driven Windows window movement with the native Win32 move loop (`ReleaseCapture` + `WM_NCLBUTTONDOWN/HTCAPTION`).

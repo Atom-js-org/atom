@@ -124,7 +124,8 @@ class WindowsNativeHost {
         width: positive(config.width, 800),
         height: positive(config.height, 600)
       },
-      lastDragClick: null
+      lastDragClick: null,
+      nativeDragPending: false
     };
     this.windows.set(Number(config.windowId), record);
     this._attachEvents(Number(config.windowId), record);
@@ -146,6 +147,10 @@ class WindowsNativeHost {
     record.nativeWindow.on('focus', () => emit({ type: 'focus' }));
     record.nativeWindow.on('blur', () => emit({ type: 'blur' }));
     record.nativeWindow.on('move', (event) => {
+      if (record.nativeDragPending) {
+        record.nativeDragPending = false;
+        record.lastDragClick = null;
+      }
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
         type: 'bounds-changed',
@@ -167,6 +172,9 @@ class WindowsNativeHost {
       if (!point || !isDraggablePoint(record, point)) return;
       this._startNativeWindowDrag(record, point);
     });
+    record.nativeWindow.on('mouse-up', (event) => {
+      if (Number(event.button) === 0) record.nativeDragPending = false;
+    });
     record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
     record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
     record.webview.on('title-changed', (event) => emit({ type: 'page-title-updated', title: event.title || '' }));
@@ -182,17 +190,12 @@ class WindowsNativeHost {
       return true;
     }
 
-    const before = readPhysicalWindowPosition(record.nativeWindow);
     const started = nativeDrag.startWindowDrag(record.nativeWindow);
     if (!started) return false;
 
-    // SendMessageW returns when the native move loop ends. A real movement must
-    // not become the first half of a later title-bar double click.
-    const after = readPhysicalWindowPosition(record.nativeWindow);
-    if (!samePhysicalPosition(before, after)) {
-      record.lastDragClick = null;
-      emitFinalWindowBounds(record);
-    }
+    // The Win32 move loop is queued asynchronously. Native move events keep the
+    // BrowserWindow bounds synchronized while Windows owns the pointer.
+    record.nativeDragPending = true;
     return true;
   }
 
@@ -352,42 +355,6 @@ function isSystemDoubleClick(record, point, settings) {
     Math.abs(Number(previous.y) - Number(point.y)) <= halfHeight;
 }
 
-function readPhysicalWindowPosition(win) {
-  try {
-    const position = win.getPosition(false);
-    const x = Number(position && position.x);
-    const y = Number(position && position.y);
-    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
-  } catch {
-    return null;
-  }
-}
-
-
-function emitFinalWindowBounds(record) {
-  try {
-    const win = record.nativeWindow;
-    const scale = safeScaleFactor(win);
-    const position = win.getPosition(false);
-    const size = win.getInnerSize(true);
-    record.atomWindow._handleHostEvent({
-      type: 'bounds-changed',
-      reason: 'move',
-      windowId: record.windowId,
-      bounds: {
-        x: Number(position.x) / scale,
-        y: Number(position.y) / scale,
-        width: Number(size.width),
-        height: Number(size.height)
-      }
-    });
-  } catch {}
-}
-
-function samePhysicalPosition(a, b) {
-  if (!a || !b) return true;
-  return Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1;
-}
 
 function resolveWritableWebViewDataDirectory() {
   const identity = sanitizePathSegment(
@@ -443,7 +410,5 @@ module.exports = {
   isDraggablePoint,
   normalizeDragRegions,
   resolveWritableWebViewDataDirectory,
-  isSystemDoubleClick,
-  emitFinalWindowBounds,
-  samePhysicalPosition
+  isSystemDoubleClick
 };

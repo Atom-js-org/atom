@@ -1,6 +1,6 @@
 # Validation record
 
-Validated for 0.5.3-alpha.1:
+Validated for 0.5.3-alpha.2:
 
 - Node.js API and packaging tests cover Electron facade resolution, IPC, repeated OAuth navigation, parent/modal windows and customization options.
 - Windows source checks cover GUI-subsystem output, PE signature handling, the prebuilt in-process host, native owner assignment and foreground activation.

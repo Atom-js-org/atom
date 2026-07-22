@@ -83,7 +83,7 @@ atom run build
 atom build windows
 atom build macos
 atom build linux
-atom build all
+atom build current --local
 ```
 
 Build artifacts are written to:
@@ -95,7 +95,7 @@ build/
 └── linux/
 ```
 
-A local build is created when the requested target matches the host OS. Cross-OS and `all` builds are delegated to the included GitHub Actions workflow and downloaded into the same `build/<os>` layout.
+Builds are local-first. Run the matching target on that operating system; AtomJS does not require GitHub Actions or attempt unsafe cross-compilation. Every build also writes `build/<target>/packed-files.json` so you can verify every embedded script, stylesheet and asset.
 
 ## Architecture
 

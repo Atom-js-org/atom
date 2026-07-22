@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3-alpha.2
+
+- Uses a writable per-application WebView2 data directory on Windows, preventing development startup failures caused by access-denied user-data folders.
+- Uses logical window coordinates consistently on Windows and implements custom-titlebar drag regions in the in-process Windows host.
+- Resolves root-relative scripts, styles, fonts and assets through the per-window bridge route.
+- Writes `packed-files.json` and payload byte counts for every build so embedded application files are auditable.
+- Keeps the macOS SEA launcher hidden from the Dock while the native window host owns the single visible application identity.
+- Makes builds local-first and stops generating projects that depend on GitHub Actions.
+
 ## 0.5.3-alpha.1
 
 - Replaced the Windows `webview-nodejs` build-time dependency with the prebuilt `@webviewjs/webview` backend.

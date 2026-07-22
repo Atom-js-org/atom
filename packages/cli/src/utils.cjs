@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-const TARGETS = new Set(['windows', 'macos', 'linux', 'all']);
+const TARGETS = new Set(['current', 'windows', 'macos', 'linux', 'all']);
 
 function hostTarget() {
   if (process.platform === 'win32') return 'windows';
@@ -169,7 +169,7 @@ function commandExists(command, args = ['--version']) {
 function validateTarget(target) {
   const normalized = String(target).toLowerCase();
   if (!TARGETS.has(normalized)) {
-    throw new Error(`Unknown build target '${target}'. Use windows, macos, linux, or all.`);
+    throw new Error(`Unknown build target '${target}'. Use current, windows, macos, linux, or all.`);
   }
   return normalized;
 }

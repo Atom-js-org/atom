@@ -1,11 +1,17 @@
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
 let singleton = null;
 
 class WindowsNativeHost {
   constructor() {
     this.binding = null;
     this.application = null;
+    this.webContext = null;
+    this.webviewDataDirectory = null;
     this.startPromise = null;
     this.windows = new Map();
     this.stopping = false;
@@ -42,6 +48,23 @@ class WindowsNativeHost {
     this.binding = binding;
     this.application = new binding.Application();
     await this.application.whenReady({ interval: 16, ref: true });
+
+    this.webviewDataDirectory = resolveWritableWebViewDataDirectory();
+    try {
+      this.webContext = this.application.createWebContext({
+        dataDirectory: this.webviewDataDirectory,
+        allowsAutomation: false
+      });
+    } catch (error) {
+      const wrapped = new Error([
+        'AtomJS could not create a writable WebView2 data directory.',
+        `Directory: ${this.webviewDataDirectory}`,
+        'Check that the current Windows user can write to LOCALAPPDATA.',
+        error && error.message ? error.message : String(error)
+      ].join('\n'));
+      wrapped.cause = error;
+      throw wrapped;
+    }
   }
 
   async createWindow(atomWindow, config) {
@@ -52,6 +75,7 @@ class WindowsNativeHost {
       title: String(config.title || 'AtomJS App'),
       width: positive(config.width, 800),
       height: positive(config.height, 600),
+      logical: true,
       resizable: config.resizable !== false,
       visible: false,
       decorations: config.frame !== false,
@@ -85,10 +109,23 @@ class WindowsNativeHost {
       url: String(config.url),
       preload: String(config.bridgeScript || ''),
       enableDevtools: Boolean(config.debug),
-      transparent: Boolean(config.transparent)
+      transparent: Boolean(config.transparent),
+      webContext: this.webContext
     });
 
-    const record = { atomWindow, nativeWindow, webview };
+    const record = {
+      atomWindow,
+      nativeWindow,
+      webview,
+      dragRegions: [],
+      dragViewport: {
+        width: positive(config.width, 800),
+        height: positive(config.height, 600)
+      },
+      lastCursorPhysical: null,
+      dragState: null,
+      lastDragClick: null
+    };
     this.windows.set(Number(config.windowId), record);
     this._attachEvents(Number(config.windowId), record);
 
@@ -107,20 +144,80 @@ class WindowsNativeHost {
       this.windows.delete(windowId);
     });
     record.nativeWindow.on('focus', () => emit({ type: 'focus' }));
-    record.nativeWindow.on('blur', () => emit({ type: 'blur' }));
-    record.nativeWindow.on('move', (event) => emit({
-      type: 'bounds-changed',
-      reason: 'move',
-      bounds: { x: Number(event.x), y: Number(event.y) }
-    }));
-    record.nativeWindow.on('resize', (event) => emit({
-      type: 'bounds-changed',
-      reason: 'resize',
-      bounds: { width: Number(event.width), height: Number(event.height) }
-    }));
+    record.nativeWindow.on('blur', () => {
+      record.dragState = null;
+      emit({ type: 'blur' });
+    });
+    record.nativeWindow.on('move', (event) => {
+      const scale = safeScaleFactor(record.nativeWindow);
+      emit({
+        type: 'bounds-changed',
+        reason: 'move',
+        bounds: { x: Number(event.x) / scale, y: Number(event.y) / scale }
+      });
+    });
+    record.nativeWindow.on('resize', (event) => {
+      const scale = safeScaleFactor(record.nativeWindow);
+      emit({
+        type: 'bounds-changed',
+        reason: 'resize',
+        bounds: { width: Number(event.width) / scale, height: Number(event.height) / scale }
+      });
+    });
+    record.nativeWindow.on('mouse-move', (event) => {
+      const point = physicalPoint(event);
+      if (!point) return;
+      record.lastCursorPhysical = point;
+      if (record.dragState) this._continueWindowDrag(record, point);
+    });
+    record.nativeWindow.on('mouse-down', (event) => {
+      if (Number(event.button) !== 0) return;
+      const point = physicalPoint(event);
+      if (!point) return;
+      record.lastCursorPhysical = point;
+      if (!isDraggablePoint(record, point)) return;
+
+      const now = Date.now();
+      const previous = record.lastDragClick;
+      record.lastDragClick = { time: now, x: point.x, y: point.y };
+      if (previous && now - previous.time <= 450 && distanceSquared(previous, point) <= 64) {
+        record.dragState = null;
+        record.lastDragClick = null;
+        try { record.nativeWindow.setMaximized(!record.nativeWindow.isMaximized()); } catch {}
+        return;
+      }
+
+      this._beginWindowDrag(record, point);
+    });
+    record.nativeWindow.on('mouse-up', (event) => {
+      if (Number(event.button) === 0) record.dragState = null;
+    });
     record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
     record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
     record.webview.on('title-changed', (event) => emit({ type: 'page-title-updated', title: event.title || '' }));
+  }
+
+  _beginWindowDrag(record, point) {
+    if (!point) return false;
+    record.dragState = { offsetX: point.x, offsetY: point.y };
+    return true;
+  }
+
+  _continueWindowDrag(record, point) {
+    const state = record.dragState;
+    if (!state) return;
+    try {
+      const current = record.nativeWindow.getPosition(false);
+      const globalX = Number(current.x) + point.x;
+      const globalY = Number(current.y) + point.y;
+      record.nativeWindow.setPosition(
+        Math.round(globalX - state.offsetX),
+        Math.round(globalY - state.offsetY),
+        false
+      );
+    } catch {
+      record.dragState = null;
+    }
   }
 
   send(message) {
@@ -154,6 +251,12 @@ class WindowsNativeHost {
         win.setMaximized(false);
         win.show();
         return true;
+      case 'set-drag-regions':
+        record.dragRegions = normalizeDragRegions(message.regions);
+        record.dragViewport = normalizeViewport(message.viewport, win);
+        return true;
+      case 'start-drag':
+        return this._beginWindowDrag(record, record.lastCursorPhysical);
       case 'set-bounds': {
         const bounds = message.bounds || {};
         if (Number.isFinite(Number(bounds.width)) && Number.isFinite(Number(bounds.height))) {
@@ -176,9 +279,14 @@ class WindowsNativeHost {
       try { record.nativeWindow.dispose(); } catch {}
     }
     this.windows.clear();
+    if (this.webContext) {
+      try { this.webContext.dispose(); } catch {}
+    }
     if (this.application) {
       try { this.application.exit(); } catch {}
     }
+    this.webContext = null;
+    this.webviewDataDirectory = null;
     this.application = null;
     this.startPromise = null;
     this.stopping = false;
@@ -188,6 +296,108 @@ class WindowsNativeHost {
 function positive(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function safeScaleFactor(win) {
+  try {
+    const scale = Number(win.scaleFactor());
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function physicalPoint(event) {
+  const x = Number(event && event.x);
+  const y = Number(event && event.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function normalizeDragRegions(regions) {
+  const normalized = [];
+  for (const region of Array.isArray(regions) ? regions.slice(0, 4096) : []) {
+    const x = Number(region && region.x);
+    const y = Number(region && region.y);
+    const width = Number(region && region.width);
+    const height = Number(region && region.height);
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
+    normalized.push({ x, y, width, height, draggable: region.draggable === true });
+  }
+  return normalized;
+}
+
+function normalizeViewport(viewport, win) {
+  let fallback = { width: 1, height: 1 };
+  try {
+    const size = win.getInnerSize(true);
+    fallback = { width: positive(size.width, 1), height: positive(size.height, 1) };
+  } catch {}
+  const width = Number(viewport && viewport.width);
+  const height = Number(viewport && viewport.height);
+  return {
+    width: Number.isFinite(width) && width > 0 ? width : fallback.width,
+    height: Number.isFinite(height) && height > 0 ? height : fallback.height
+  };
+}
+
+function isDraggablePoint(record, physical) {
+  if (!record.dragRegions.length) return false;
+  const scale = safeScaleFactor(record.nativeWindow);
+  const logical = { x: physical.x / scale, y: physical.y / scale };
+  let inner = { width: record.dragViewport.width, height: record.dragViewport.height };
+  try { inner = record.nativeWindow.getInnerSize(true); } catch {}
+  const scaleX = record.dragViewport.width > 0 ? Number(inner.width) / record.dragViewport.width : 1;
+  const scaleY = record.dragViewport.height > 0 ? Number(inner.height) / record.dragViewport.height : 1;
+  let draggable = false;
+
+  for (const region of record.dragRegions) {
+    const inside = logical.x >= region.x * scaleX &&
+      logical.x < (region.x + region.width) * scaleX &&
+      logical.y >= region.y * scaleY &&
+      logical.y < (region.y + region.height) * scaleY;
+    if (!inside) continue;
+    if (!region.draggable) return false;
+    draggable = true;
+  }
+  return draggable;
+}
+
+function distanceSquared(a, b) {
+  const dx = Number(a.x) - Number(b.x);
+  const dy = Number(a.y) - Number(b.y);
+  return (dx * dx) + (dy * dy);
+}
+
+function resolveWritableWebViewDataDirectory() {
+  const identity = sanitizePathSegment(
+    process.env.ATOM_APP_ID || process.env.ATOM_APP_NAME || 'AtomJS.App'
+  );
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const candidates = [
+    path.join(localAppData, identity, 'AtomJS', 'WebView2'),
+    path.join(os.tmpdir(), identity, 'AtomJS', 'WebView2')
+  ];
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.R_OK | fs.constants.W_OK);
+      return candidate;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`No writable WebView2 data directory was available: ${lastError ? lastError.message : 'unknown error'}`);
+}
+
+function sanitizePathSegment(value) {
+  return String(value || 'AtomJS.App')
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 120) || 'AtomJS.App';
 }
 
 function sanitizeWindowsClass(value) {
@@ -206,4 +416,11 @@ async function stopWindowsNativeHost() {
   await current.stop();
 }
 
-module.exports = { WindowsNativeHost, getWindowsNativeHost, stopWindowsNativeHost };
+module.exports = {
+  WindowsNativeHost,
+  getWindowsNativeHost,
+  stopWindowsNativeHost,
+  isDraggablePoint,
+  normalizeDragRegions,
+  resolveWritableWebViewDataDirectory
+};

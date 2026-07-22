@@ -220,6 +220,7 @@ class BridgeServer {
 
     const match = url.pathname.match(/^\/__atom\/window\/(\d+)\/(.*)$/);
     if (!match) {
+      if (await redirectRootRelativeApplicationAsset(request, response, url)) return;
       response.statusCode = 404;
       response.end('Not found');
       return;
@@ -271,6 +272,58 @@ class BridgeServer {
   }
 }
 
+async function redirectRootRelativeApplicationAsset(request, response, url) {
+  if (!['GET', 'HEAD'].includes(String(request.method || 'GET').toUpperCase())) return false;
+  if (url.pathname.startsWith('/__atom/')) return false;
+
+  const referer = request.headers && request.headers.referer;
+  if (!referer) return false;
+
+  let refererUrl;
+  try {
+    refererUrl = new URL(referer, 'http://127.0.0.1');
+  } catch {
+    return false;
+  }
+
+  const refererMatch = refererUrl.pathname.match(/^\/__atom\/window\/(\d+)\//);
+  if (!refererMatch) return false;
+
+  const windowId = Number(refererMatch[1]);
+  const win = state.windows.get(windowId);
+  if (!win || !win._contentRoot) return false;
+
+  let requested;
+  try {
+    requested = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  } catch {
+    return false;
+  }
+  if (!requested) return false;
+
+  const root = path.resolve(win._contentRoot);
+  const absolute = path.resolve(root, requested);
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) return false;
+
+  try {
+    const stat = await fs.promises.stat(absolute);
+    if (!stat.isFile() && !stat.isDirectory()) return false;
+  } catch {
+    return false;
+  }
+
+  const encodedPath = requested
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  response.statusCode = 307;
+  response.setHeader('location', `/__atom/window/${windowId}/${encodedPath}${url.search}`);
+  response.setHeader('cache-control', 'no-store');
+  response.end();
+  return true;
+}
+
 function createIpcEvent(win) {
   return Object.freeze({
     sender: win.webContents,
@@ -289,4 +342,4 @@ function serializeError(error) {
   };
 }
 
-module.exports = { BridgeServer };
+module.exports = { BridgeServer, redirectRootRelativeApplicationAsset };

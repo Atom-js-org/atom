@@ -17,7 +17,6 @@ async function initCommand(directory, options = {}) {
   const productName = humanize(packageName);
 
   await fse.ensureDir(path.join(root, 'src'));
-  await fse.ensureDir(path.join(root, '.github', 'workflows'));
 
   await fs.promises.writeFile(path.join(root, 'package.json'), JSON.stringify({
     name: packageName,
@@ -26,8 +25,8 @@ async function initCommand(directory, options = {}) {
     main: 'src/main.js',
     scripts: {
       dev: 'atom run dev',
-      build: 'atom build all',
-      'build:current': `atom build ${hostTarget()}`,
+      build: 'atom build current --local',
+      'build:current': 'atom build current --local',
       start: 'atom run build'
     },
     dependencies: {
@@ -81,9 +80,6 @@ async function initCommand(directory, options = {}) {
         deb: true,
         rpm: true
       }
-    },
-    github: {
-      workflow: 'atom-build.yml'
     }
   }, null, 2));
 
@@ -95,7 +91,6 @@ async function initCommand(directory, options = {}) {
   await fs.promises.writeFile(path.join(root, 'src', 'index.html'), htmlTemplate(productName));
   await fs.promises.writeFile(path.join(root, 'src', 'renderer.js'), rendererTemplate());
   await fs.promises.writeFile(path.join(root, '.gitignore'), 'node_modules/\nbuild/\n.atom/\n');
-  await fs.promises.writeFile(path.join(root, '.github', 'workflows', 'atom-build.yml'), workflowTemplate());
 
   console.log(`Created AtomJS project in ${root}`);
   console.log('Next: npm install && npm run dev');

@@ -43,14 +43,22 @@ test('renderer bridge maps Electron-style app regions to native drag-region upda
 test('bridge serves files and handles invoke IPC', async (t) => {
   await atom.app.whenReady();
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-test-'));
-  fs.writeFileSync(path.join(temp, 'index.html'), '<h1>hello</h1>');
+  fs.mkdirSync(path.join(temp, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(temp, 'index.html'), '<link rel="stylesheet" href="/assets/app.css"><h1>hello</h1>');
+  fs.writeFileSync(path.join(temp, 'assets', 'app.css'), 'h1 { font-weight: 700; }');
 
   const win = new atom.BrowserWindow({ show: false });
   win._contentRoot = temp;
   const fileUrl = state.bridgeServer.fileUrl(win.id, 'index.html');
   const response = await fetch(fileUrl);
   assert.equal(response.status, 200);
-  assert.equal(await response.text(), '<h1>hello</h1>');
+  assert.match(await response.text(), /<h1>hello<\/h1>/);
+
+  const rootRelativeAssetUrl = new URL('/assets/app.css', fileUrl);
+  const assetResponse = await fetch(rootRelativeAssetUrl, { headers: { referer: fileUrl } });
+  assert.equal(assetResponse.status, 200);
+  assert.match(assetResponse.url, new RegExp(`/__atom/window/${win.id}/assets/app\\.css$`));
+  assert.equal(await assetResponse.text(), 'h1 { font-weight: 700; }');
 
   atom.ipcMain.handle('math:add', (_event, a, b) => a + b);
   const socket = new WebSocket(state.bridgeServer.websocketUrl(win.id));
@@ -253,5 +261,10 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(browserWindow, /process\.platform === 'win32'[\s\S]*getWindowsNativeHost\(\)/);
   assert.match(windowsHost, /require\('@webviewjs\/webview'\)/);
   assert.match(windowsHost, /new binding\.Application/);
+  assert.match(windowsHost, /createWebContext/);
+  assert.match(windowsHost, /dataDirectory: this\.webviewDataDirectory/);
+  assert.match(windowsHost, /logical: true/);
+  assert.match(windowsHost, /case 'set-drag-regions'/);
+  assert.match(windowsHost, /case 'start-drag'/);
   assert.doesNotMatch(windowsHost, /child_process|spawn\(/);
 });

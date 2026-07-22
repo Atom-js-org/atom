@@ -13,11 +13,12 @@ test('build target validation matches the documented CLI', () => {
   assert.equal(validateTarget('windows'), 'windows');
   assert.equal(validateTarget('MACOS'), 'macos');
   assert.equal(validateTarget('all'), 'all');
+  assert.equal(validateTarget('current'), 'current');
   assert.ok(['windows', 'macos', 'linux'].includes(hostTarget()));
   assert.throws(() => validateTarget('android'), /Unknown build target/);
 });
 
-test('atom init creates Electron-like project structure and workflow', async () => {
+test('atom init creates a local-first Electron-like project without requiring GitHub Actions', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-init-'));
   const projectRoot = path.join(tempRoot, 'sample-app');
   await initCommand(projectRoot, { name: 'sample-app' });
@@ -26,7 +27,9 @@ test('atom init creates Electron-like project structure and workflow', async () 
   assert.equal(project.config.main, 'src/main.js');
   assert.equal(project.config.productName, 'Sample App');
   assert.ok(fs.existsSync(path.join(projectRoot, 'src', 'preload.js')));
-  assert.ok(fs.existsSync(path.join(projectRoot, '.github', 'workflows', 'atom-build.yml')));
+  assert.equal(fs.existsSync(path.join(projectRoot, '.github', 'workflows', 'atom-build.yml')), false);
+  const initializedPackage = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+  assert.equal(initializedPackage.scripts.build, 'atom build current --local');
   assert.ok(fs.existsSync(path.join(projectRoot, 'assets', 'icon.png')));
   assert.ok(fs.existsSync(path.join(projectRoot, 'assets', 'icon.ico')));
   assert.equal(project.config.build.windows.icon, 'assets/icon.ico');
@@ -67,21 +70,47 @@ test('macOS embedded payload dereferences directory symlinks', async () => {
   const output = path.join(tempRoot, 'payload.gz');
 
   fs.mkdirSync(path.join(packageRoot, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(appRoot, 'src', 'assets'), { recursive: true });
   fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"@atom-js-org/runtime"}');
   fs.writeFileSync(path.join(packageRoot, 'src', 'index.cjs'), 'module.exports = 1;');
+  fs.writeFileSync(path.join(appRoot, 'src', 'index.html'), '<link rel="stylesheet" href="/src/styles.css"><script src="/src/app.js"></script>');
+  fs.writeFileSync(path.join(appRoot, 'src', 'styles.css'), 'body { background: black; }');
+  fs.writeFileSync(path.join(appRoot, 'src', 'app.js'), 'console.log("packed");');
+  fs.writeFileSync(path.join(appRoot, 'src', 'assets', 'logo.svg'), '<svg></svg>');
   fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
   fs.symlinkSync(packageRoot, linkedRoot, 'dir');
 
-  await createApplicationPayload(appRoot, output);
+  const summary = await createApplicationPayload(appRoot, output);
   const archive = JSON.parse(zlib.gunzipSync(fs.readFileSync(output)).toString('utf8'));
   const paths = new Set(archive.files.map((entry) => entry.path));
 
   assert.ok(paths.has('node_modules/@atom-js-org/runtime/package.json'));
   assert.ok(paths.has('node_modules/@atom-js-org/runtime/src/index.cjs'));
+  assert.ok(paths.has('src/index.html'));
+  assert.ok(paths.has('src/styles.css'));
+  assert.ok(paths.has('src/app.js'));
+  assert.ok(paths.has('src/assets/logo.svg'));
+  assert.equal(summary.fileCount, archive.files.length);
+  assert.ok(summary.sourceBytes > 0);
+  assert.ok(summary.compressedBytes > 0);
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
+
+
+test('macOS bundle keeps only the native window host visible in the Dock', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  assert.match(buildSource, /<key>LSUIElement<\/key><true\/>/);
+  assert.match(buildSource, /<key>LSMultipleInstancesProhibited<\/key><true\/>/);
+});
+
+test('build command is local-first and does not require GitHub Actions', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  assert.match(buildSource, /Remote GitHub Actions builds are disabled/);
+  assert.match(buildSource, /requestedTarget === 'current'/);
+  assert.doesNotMatch(buildSource.slice(0, buildSource.indexOf('async function localBuild')), /return remoteBuild/);
+});
 
 test('Windows release packaging uses a GUI PE executable, branded metadata and customizable NSIS', () => {
   const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');

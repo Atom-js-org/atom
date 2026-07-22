@@ -25,10 +25,10 @@ program
 program
   .command('build')
   .description('Build an AtomJS project')
-  .argument('<target>', 'windows, macos, linux, or all')
+  .argument('<target>', 'current, windows, macos, linux, or all')
   .option('-p, --project <path>', 'project directory', process.cwd())
-  .option('--local', 'never use the remote build workflow')
-  .option('--remote', 'always use the remote build workflow')
+  .option('--local', 'build on this machine (default; kept for compatibility)')
+  .option('--remote', 'deprecated: remote GitHub Actions builds are disabled')
   .option('--skip-install', 'reuse staged node_modules when possible')
   .action(async (target, options) => buildCommand(target, options));
 

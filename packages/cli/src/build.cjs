@@ -21,17 +21,33 @@ const { resolveElectronCompatibilityRoot } = require('./electron-compat.cjs');
 const cliPackageVersion = require('../package.json').version;
 
 async function buildCommand(targetInput, options = {}) {
-  const target = validateTarget(targetInput);
+  const requestedTarget = validateTarget(targetInput);
   const project = loadProject(options.project);
   const host = hostTarget();
+  const target = requestedTarget === 'current' ? host : requestedTarget;
 
-  if (options.local && (target === 'all' || target !== host)) {
-    throw new Error(`A local ${host} machine cannot produce a complete '${target}' release. Remove --local to use GitHub Actions.`);
+  if (options.remote) {
+    throw new Error([
+      'Remote GitHub Actions builds are disabled.',
+      'Build locally on the matching operating system instead:',
+      '  Windows: atom build windows --local',
+      '  macOS:   atom build macos --local',
+      '  Linux:   atom build linux --local'
+    ].join('\n'));
   }
 
-  const needsRemote = options.remote || target === 'all' || target !== host;
-  if (needsRemote) return remoteBuild(project, target);
-  return localBuild(project, host, options);
+  if (target === 'all') {
+    throw new Error([
+      "'atom build all' cannot safely cross-build native WebView applications.",
+      'Run the matching local build command once on each operating system.'
+    ].join('\n'));
+  }
+
+  if (target !== host) {
+    throw new Error(`Local target mismatch: this machine is ${host}, but '${target}' was requested. Build that target on a ${target} machine.`);
+  }
+
+  return localBuild(project, target, options);
 }
 
 async function localBuild(project, target, options = {}) {
@@ -61,8 +77,8 @@ async function localBuild(project, target, options = {}) {
     await vendorFramework(stagedApp, project, target);
     await installProductionDependencies(stagedApp, options.skipInstall, target);
 
-    console.log('Embedding application code and production dependencies into the executable...');
-    await createApplicationPayload(stagedApp, payloadPath);
+    console.log('Embedding application code, assets and production dependencies into the executable...');
+    const payloadSummary = await createApplicationPayload(stagedApp, payloadPath);
 
     const executableName = target === 'windows' ? `${productName}.exe` : productName;
     const executablePath = path.join(unpacked, executableName);
@@ -108,6 +124,15 @@ async function localBuild(project, target, options = {}) {
       outputs = await packageLinux({ project, buildRoot, unpacked, executableName, productName });
     }
 
+    const inventoryPath = path.join(buildRoot, 'packed-files.json');
+    await fs.promises.writeFile(inventoryPath, JSON.stringify({
+      format: 1,
+      fileCount: payloadSummary.fileCount,
+      sourceBytes: payloadSummary.sourceBytes,
+      compressedBytes: payloadSummary.compressedBytes,
+      files: payloadSummary.paths
+    }, null, 2));
+
     const manifest = {
       atomjsVersion: cliPackageVersion,
       target,
@@ -116,6 +141,12 @@ async function localBuild(project, target, options = {}) {
       createdAt: new Date().toISOString(),
       run: path.relative(buildRoot, runPath),
       unpacked: path.relative(buildRoot, unpackedPath),
+      payload: {
+        fileCount: payloadSummary.fileCount,
+        sourceBytes: payloadSummary.sourceBytes,
+        compressedBytes: payloadSummary.compressedBytes,
+        inventory: path.basename(inventoryPath)
+      },
       outputs: outputs.map((file) => path.relative(buildRoot, file))
     };
     await fs.promises.writeFile(path.join(buildRoot, 'manifest.json'), JSON.stringify(manifest, null, 2));
@@ -251,12 +282,15 @@ async function installProductionDependencies(appDir, skipInstall, target) {
 
 async function createApplicationPayload(appDir, outputPath) {
   const files = [];
+  let sourceBytes = 0;
 
   async function addFile(source, relative, stat) {
+    const data = await fs.promises.readFile(source);
+    sourceBytes += data.length;
     files.push({
       path: relative.split(path.sep).join('/'),
       mode: stat.mode & 0o777,
-      data: (await fs.promises.readFile(source)).toString('base64')
+      data: data.toString('base64')
     });
   }
 
@@ -300,6 +334,12 @@ async function createApplicationPayload(appDir, outputPath) {
   const payload = Buffer.from(JSON.stringify({ format: 1, files }));
   const compressed = require('node:zlib').gzipSync(payload, { level: 9 });
   await fs.promises.writeFile(outputPath, compressed);
+  return {
+    fileCount: files.length,
+    sourceBytes,
+    compressedBytes: compressed.length,
+    paths: files.map((entry) => entry.path)
+  };
 }
 
 async function createSeaLauncher({ executablePath, appDir, target, productName, appId, project = null, payloadPath = null }) {
@@ -955,6 +995,8 @@ async function packageMacOS({ project, buildRoot, unpacked, executableName, prod
 <key>CFBundleName</key><string>${xml(bundleName)}</string>
 <key>CFBundleDisplayName</key><string>${xml(productName)}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+<key>LSMultipleInstancesProhibited</key><true/>
 <key>CFBundleShortVersionString</key><string>${xml(version)}</string>
 <key>CFBundleVersion</key><string>${xml(bundleVersion)}</string>
 <key>LSMinimumSystemVersion</key><string>${xml(config.minimumSystemVersion)}</string>

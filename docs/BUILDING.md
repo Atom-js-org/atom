@@ -8,7 +8,7 @@ atom build macos
 atom build linux
 ```
 
-A local build must match the host operating system. Windows builds no longer require CMake or Visual Studio Build Tools; the WebView binding is downloaded as a prebuilt platform package. `atom build all` dispatches the included GitHub Actions workflow and downloads the platform artifacts into `build/<target>`.
+A local build must match the host operating system. Windows builds no longer require CMake or Visual Studio Build Tools; the WebView binding is downloaded as a prebuilt platform package. AtomJS does not require GitHub Actions: run `atom build current --local` on each target operating system. Every build writes `packed-files.json` beside `manifest.json` so embedded scripts, styles and assets can be audited before release.
 
 ## Configuration
 

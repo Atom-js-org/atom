@@ -103,6 +103,7 @@ class BrowserWindow extends EventEmitter {
       resizable: this.options.resizable,
       center: this.options.center,
       frame: this.options.frame,
+      cornerRadius: this.options.cornerRadius,
       parentWindowId: this._parent ? this._parent.id : null,
       parentProcessId: this._parent && this._parent._child ? this._parent._child.pid : null,
       modal: this.options.modal,
@@ -658,6 +659,7 @@ function normalizeOptions(options) {
     maxHeight: finiteOrZero(options.maxHeight),
     center: options.center !== false,
     frame: options.frame !== false,
+    cornerRadius: normalizeCornerRadius(options.cornerRadius, options.frame === false ? 18 : 0),
     backgroundColor: options.backgroundColor || '#ffffff',
     webPreferences: {
       preload: options.webPreferences && options.webPreferences.preload
@@ -665,7 +667,12 @@ function normalizeOptions(options) {
         : null,
       contextIsolation: options.webPreferences ? options.webPreferences.contextIsolation !== false : true,
       nodeIntegration: false,
-      devTools: options.webPreferences ? options.webPreferences.devTools !== false : true
+      // DevTools are opt-in for production windows. Keeping them enabled by
+      // default makes WebView2 create extra tooling state and is especially
+      // noticeable on clean Windows installations.
+      devTools: options.webPreferences
+        ? options.webPreferences.devTools === true
+        : process.env.ATOM_DEV === '1'
     }
   };
 }
@@ -703,6 +710,12 @@ function normalizeTitleBarStyle(value) {
 }
 
 function finiteOr(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function normalizeCornerRadius(value, fallback) {
+  if (value === false || value === 0 || value === '0') return 0;
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }

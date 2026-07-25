@@ -12,6 +12,8 @@ export interface BrowserWindowConstructorOptions {
   resizable?: boolean;
   center?: boolean;
   frame?: boolean;
+  /** Native Windows corner radius in logical pixels. Set 0 to disable. */
+  cornerRadius?: number | false;
   parent?: BrowserWindow;
   modal?: boolean;
   alwaysOnTop?: boolean;

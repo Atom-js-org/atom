@@ -8,6 +8,7 @@ const SM_CYDOUBLECLK = 37;
 const { Worker } = require('node:worker_threads');
 
 let singleton = null;
+let shapeSingleton = null;
 let warned = false;
 
 class WindowsNativeDragApi {
@@ -64,6 +65,60 @@ class WindowsNativeDragApi {
     worker.once('error', () => {});
     worker.once('exit', () => worker.removeAllListeners());
     return true;
+  }
+}
+
+class WindowsNativeShapeApi {
+  constructor(koffi) {
+    if (!koffi || typeof koffi.load !== 'function') {
+      throw new TypeError('A Koffi module is required.');
+    }
+
+    const user32 = koffi.load('user32.dll');
+    const gdi32 = koffi.load('gdi32.dll');
+    this.createRoundRectRgn = gdi32.func(
+      '__stdcall',
+      'CreateRoundRectRgn',
+      'void *',
+      ['int', 'int', 'int', 'int', 'int', 'int']
+    );
+    this.setWindowRgn = user32.func(
+      '__stdcall',
+      'SetWindowRgn',
+      'int',
+      ['void *', 'void *', 'bool']
+    );
+    this.deleteObject = gdi32.func('__stdcall', 'DeleteObject', 'bool', ['void *']);
+  }
+
+  setRoundedCorners(nativeWindow, radius) {
+    const handle = nativeWindowHandle(nativeWindow);
+    if (handle === 0n) return false;
+
+    const size = nativeWindowSize(nativeWindow);
+    if (!size || size.width < 2 || size.height < 2) return false;
+
+    const clampedRadius = Math.max(0, Math.min(
+      Math.round(Number(radius) || 0),
+      Math.floor(Math.min(size.width, size.height) / 2)
+    ));
+    if (clampedRadius === 0) return false;
+
+    const region = this.createRoundRectRgn(
+      0,
+      0,
+      size.width + 1,
+      size.height + 1,
+      clampedRadius * 2,
+      clampedRadius * 2
+    );
+    if (!region) return false;
+
+    const applied = Number(this.setWindowRgn(handle, region, true)) !== 0;
+    if (!applied) {
+      try { this.deleteObject(region); } catch {}
+    }
+    return applied;
   }
 }
 
@@ -142,10 +197,42 @@ function getWindowsNativeDragApi() {
   }
 }
 
+function getWindowsNativeShapeApi() {
+  if (process.platform !== 'win32') return null;
+  if (shapeSingleton) return shapeSingleton;
+
+  try {
+    shapeSingleton = new WindowsNativeShapeApi(require('koffi'));
+    return shapeSingleton;
+  } catch (error) {
+    if (!warned) {
+      warned = true;
+      console.warn([
+        '[AtomJS] Native Windows rounded-window support could not be initialized.',
+        error && error.message ? error.message : String(error)
+      ].join('\n'));
+    }
+    return null;
+  }
+}
+
+function nativeWindowSize(nativeWindow) {
+  try {
+    const size = nativeWindow.getOuterSize(false);
+    const width = Math.round(Number(size && size.width));
+    const height = Math.round(Number(size && size.height));
+    if (width > 0 && height > 0) return { width, height };
+  } catch {}
+  return null;
+}
+
 module.exports = {
   WindowsNativeDragApi,
+  WindowsNativeShapeApi,
   getWindowsNativeDragApi,
+  getWindowsNativeShapeApi,
   nativeWindowHandle,
+  nativeWindowSize,
   packScreenPoint,
   constants: {
     WM_NCLBUTTONDOWN,

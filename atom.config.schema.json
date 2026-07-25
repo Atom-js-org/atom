@@ -121,6 +121,83 @@
                 "highestAvailable",
                 "requireAdministrator"
               ]
+            },
+            "cornerRadius": {
+              "type": [
+                "number",
+                "boolean"
+              ],
+              "minimum": 0,
+              "description": "Default native corner radius for frameless Windows windows. Set false or 0 to disable."
+            },
+            "store": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "identityName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "publisher": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "publisherDisplayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "logo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "square44Logo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "square150Logo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "minVersion": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "upload": {
+                  "type": "boolean"
+                }
+              }
             }
           }
         },

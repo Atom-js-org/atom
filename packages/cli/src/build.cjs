@@ -227,6 +227,7 @@ async function localBuild(project, target, options = {}) {
     await copyApplication(project.root, stagedApp);
     await vendorFramework(stagedApp, project, target);
     await installProductionDependencies(stagedApp, options.skipInstall, target);
+    if (target === 'windows') await signWindowsPayloadBinaries(stagedApp);
 
     console.log('Embedding application code, assets and production dependencies into the executable...');
     const payloadSummary = await createApplicationPayload(stagedApp, payloadPath);
@@ -1034,12 +1035,137 @@ SectionEnd
   } else {
     console.warn('NSIS was not found; installer.nsi was generated but the .exe installer was skipped.');
   }
+  if (config.store.enabled) {
+    outputs.push(...await packageWindowsStore({
+      project,
+      buildRoot,
+      unpacked,
+      executableName,
+      productName,
+      artifactBase
+    }));
+  }
   return outputs;
 }
 
-async function signWindowsArtifact(filePath, label) {
+async function packageWindowsStore({ project, buildRoot, unpacked, executableName, productName, artifactBase }) {
+  const config = project.config.build.windows.store;
+  const makeAppx = resolveMakeAppxExecutable();
+  if (!makeAppx) {
+    throw new Error('Microsoft Store packaging is enabled, but MakeAppx.exe was not found. Install the Windows SDK or set MAKEAPPX_PATH.');
+  }
+  if (!config.identityName || !config.publisher) {
+    throw new Error('Microsoft Store packaging requires build.windows.store.identityName and build.windows.store.publisher from Partner Center.');
+  }
+  const logo = resolveProjectAsset(project, config.logo);
+  const square44Logo = resolveProjectAsset(project, config.square44Logo || config.logo);
+  const square150Logo = resolveProjectAsset(project, config.square150Logo || config.logo);
+  if ([logo, square44Logo, square150Logo].some((asset) => !asset || path.extname(asset).toLowerCase() !== '.png')) {
+    throw new Error('Microsoft Store packaging requires PNG assets for logo, square44Logo and square150Logo.');
+  }
+
+  const packageRoot = path.join(buildRoot, '.msix-package');
+  const assetsRoot = path.join(packageRoot, 'Assets');
+  await fse.remove(packageRoot);
+  await fse.ensureDir(assetsRoot);
+  await fse.copy(unpacked, packageRoot, { filter: (source) => path.basename(source) !== '.msix-package' });
+  await fse.copy(logo, path.join(assetsRoot, 'StoreLogo.png'));
+  await fse.copy(square44Logo, path.join(assetsRoot, 'Square44x44Logo.png'));
+  await fse.copy(square150Logo, path.join(assetsRoot, 'Square150x150Logo.png'));
+
+  const manifestPath = path.join(packageRoot, 'AppxManifest.xml');
+  await fs.promises.writeFile(manifestPath, createStoreManifest({
+    project,
+    config,
+    productName,
+    executableName
+  }), 'utf8');
+
+  const architecture = windowsAppArchitecture();
+  const msixPath = path.join(buildRoot, `${artifactBase}-store-${architecture}.msix`);
+  await run(makeAppx, ['pack', '/d', packageRoot, '/p', msixPath, '/o']);
+  await signWindowsArtifact(msixPath, 'the Microsoft Store MSIX package', true);
+
+  const outputs = [msixPath];
+  if (config.upload) {
+    const uploadRoot = path.join(buildRoot, '.msix-upload');
+    const uploadPath = path.join(buildRoot, `${artifactBase}-store-${architecture}.msixupload`);
+    await fse.remove(uploadRoot);
+    await fse.ensureDir(uploadRoot);
+    await fse.copy(msixPath, path.join(uploadRoot, path.basename(msixPath)));
+    await archiveDirectory(uploadRoot, uploadPath, 'zip');
+    outputs.push(uploadPath);
+  }
+  return outputs;
+}
+
+function createStoreManifest({ project, config, productName, executableName }) {
+  const version = normalizeWindowsVersion(project.packageJson.version);
+  const architecture = windowsAppArchitecture();
+  return `<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop rescap">
+  <Identity Name="${xml(config.identityName)}" Publisher="${xml(config.publisher)}" Version="${xml(version)}" ProcessorArchitecture="${architecture}" />
+  <Properties>
+    <DisplayName>${xml(config.displayName || productName)}</DisplayName>
+    <PublisherDisplayName>${xml(config.publisherDisplayName || config.publisher)}</PublisherDisplayName>
+    <Description>${xml(config.description || project.packageJson.description || productName)}</Description>
+    <Logo>Assets\\StoreLogo.png</Logo>
+  </Properties>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="${xml(config.minVersion)}" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Applications>
+    <Application Id="App" Executable="${xml(executableName)}" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="${xml(config.displayName || productName)}" Description="${xml(config.description || project.packageJson.description || productName)}" BackgroundColor="transparent" Square150x150Logo="Assets\\Square150x150Logo.png" Square44x44Logo="Assets\\Square44x44Logo.png" />
+      <Extensions>
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="${xml(executableName)}" />
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
+</Package>
+`;
+}
+
+function windowsAppArchitecture() {
+  if (process.arch === 'arm64') return 'arm64';
+  if (process.arch === 'ia32') return 'x86';
+  return 'x64';
+}
+
+function resolveMakeAppxExecutable() {
+  const candidates = [
+    process.env.MAKEAPPX_PATH,
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Windows Kits', '10', 'App Certification Kit', 'makeappx.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Windows Kits', '10', 'App Certification Kit', 'makeappx.exe')
+  ].filter(Boolean);
+
+  for (const root of [
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Windows Kits', '10', 'bin'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Windows Kits', '10', 'bin')
+  ].filter(Boolean)) {
+    if (!fs.existsSync(root)) continue;
+    for (const build of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!build.isDirectory()) continue;
+      for (const architecture of ['x64', 'arm64', 'x86']) {
+        candidates.push(path.join(root, build.name, architecture, 'makeappx.exe'));
+      }
+    }
+  }
+
+  if (commandExists('makeappx', ['/?'])) return 'makeappx';
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+async function signWindowsArtifact(filePath, label, requiredOverride = false) {
   const certificate = process.env.ATOM_WINDOWS_CERTIFICATE;
-  const required = process.env.ATOM_WINDOWS_SIGN === '1';
+  const required = requiredOverride || process.env.ATOM_WINDOWS_SIGN === '1';
   if (!certificate) {
     if (required) {
       throw new Error(`Windows signing is required, but ATOM_WINDOWS_CERTIFICATE is not set for ${label}.`);
@@ -1067,6 +1193,29 @@ async function signWindowsArtifact(filePath, label) {
   args.push(filePath);
   await run(signTool, args);
   return true;
+}
+
+async function signWindowsPayloadBinaries(root) {
+  if (!process.env.ATOM_WINDOWS_CERTIFICATE && process.env.ATOM_WINDOWS_SIGN !== '1') return;
+
+  const nativeExtensions = new Set(['.dll', '.exe', '.node']);
+  const files = [];
+  async function visit(directory) {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolute);
+        continue;
+      }
+      if (entry.isFile() && nativeExtensions.has(path.extname(entry.name).toLowerCase())) files.push(absolute);
+    }
+  }
+
+  await visit(root);
+  for (const filePath of files) {
+    await signWindowsArtifact(filePath, `embedded Windows binary ${path.relative(root, filePath)}`, true);
+  }
 }
 
 function resolveNsisExecutable() {

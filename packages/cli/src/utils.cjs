@@ -40,6 +40,7 @@ function loadProject(projectInput) {
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
   const build = objectOrEmpty(config.build);
   const windows = objectOrEmpty(build.windows);
+  const store = objectOrEmpty(windows.store);
   const macos = objectOrEmpty(build.macos);
   const linux = objectOrEmpty(build.linux);
   const dmg = objectOrEmpty(macos.dmg);
@@ -73,9 +74,25 @@ function loadProject(projectInput) {
           welcomeText: windows.welcomeText || null,
           finishText: windows.finishText || null,
           publisher: windows.publisher || null,
+          cornerRadius: windows.cornerRadius === false ? 0 : Number.isFinite(Number(windows.cornerRadius))
+            ? Math.max(0, Math.round(Number(windows.cornerRadius)))
+            : 18,
           requestedExecutionLevel: ['asInvoker', 'highestAvailable', 'requireAdministrator'].includes(windows.requestedExecutionLevel)
             ? windows.requestedExecutionLevel
-            : 'asInvoker'
+            : 'asInvoker',
+          store: {
+            enabled: store.enabled === true,
+            identityName: store.identityName || null,
+            publisher: store.publisher || null,
+            publisherDisplayName: store.publisherDisplayName || windows.publisher || packageAuthorFallback(packageJson),
+            displayName: store.displayName || productName,
+            description: store.description || packageJson.description || productName,
+            logo: store.logo || icon || null,
+            square44Logo: store.square44Logo || store.logo || icon || null,
+            square150Logo: store.square150Logo || store.logo || icon || null,
+            minVersion: store.minVersion || '10.0.17763.0',
+            upload: store.upload !== false
+          }
         },
         macos: {
           icon: macos.icon || icon,
@@ -118,6 +135,12 @@ function loadProject(projectInput) {
 
 function objectOrEmpty(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function packageAuthorFallback(packageJson) {
+  if (typeof packageJson.author === 'string' && packageJson.author.trim()) return packageJson.author.trim();
+  if (packageJson.author && typeof packageJson.author === 'object' && packageJson.author.name) return String(packageJson.author.name);
+  return 'AtomJS application';
 }
 
 function normalizeSpawn(command, args) {

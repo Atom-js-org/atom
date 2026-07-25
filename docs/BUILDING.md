@@ -11,6 +11,24 @@ atom build linux
 
 A local build must match the host operating system. Windows builds no longer require CMake or Visual Studio Build Tools; the WebView binding is downloaded as a prebuilt platform package. AtomJS does not require GitHub Actions: run `atom build current --local` on each target operating system. Every build writes `packed-files.json` beside `manifest.json` so embedded scripts, styles and assets can be audited before release.
 
+## Release script
+
+From the repository root, after changing the version with `npm version`:
+
+```bash
+./build.sh
+```
+
+The script requires Node.js 24+, runs the test and package checks, verifies npm
+authentication, refuses an already-published version, commits local changes,
+pushes the current branch to `origin`, and publishes runtime, Electron
+compatibility, and CLI packages in dependency order. Set `COMMIT_MESSAGE` or
+`NPM_TAG` to customize the release metadata. It does not create a version
+automatically.
+
+On Windows, run it from Git Bash or WSL; native desktop artifacts still need
+to be built on their target operating system.
+
 ## Configuration
 
 Build output is controlled from `atom.config.json`:
@@ -39,7 +57,18 @@ Build output is controlled from `atom.config.json`:
       "welcomeText": null,
       "finishText": null,
       "publisher": "Example Company",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "cornerRadius": 18,
+      "store": {
+        "enabled": false,
+        "identityName": null,
+        "publisher": null,
+        "publisherDisplayName": null,
+        "logo": "assets/icon.png",
+        "square44Logo": "assets/store-44.png",
+        "square150Logo": "assets/store-150.png",
+        "upload": true
+      }
     },
     "macos": {
       "icon": "assets/icon.png",
@@ -81,8 +110,9 @@ Artifact templates support `${productName}`, `${version}`, `${target}`, `${arch}
 The Windows executable is a real GUI PE file and does not need Administrator
 rights. Windows 11 SmartScreen/Smart App Control can still block a newly built
 or unsigned executable; that is a Windows trust decision, not a window-runtime
-failure. For a distributable release, sign both the application executable and
-the NSIS installer as the last build step:
+failure. For a distributable release, sign the application executable, its
+embedded native `.dll`/`.node` binaries, and the NSIS installer as the last
+build step:
 
 ```powershell
 $env:ATOM_WINDOWS_SIGN = "1"
@@ -96,6 +126,13 @@ atom build windows --local
 with `ATOM_WINDOWS_SIGNTOOL`. For internal testing, Windows may still require
 the user or administrator to explicitly trust an unsigned build. Signing is
 not a mechanism to bypass enterprise security policy.
+
+Windows uses the system WebView2 runtime, which is Chromium-based but avoids
+shipping a second full Chromium copy with every AtomJS application. Production
+windows keep DevTools disabled unless explicitly enabled. For custom frameless
+windows, prefer an opaque `backgroundColor` with native `cornerRadius`; this
+avoids the more expensive transparent WebView2 composition path while keeping
+the native rounded clipping.
 
 ## Windows output
 
@@ -111,6 +148,19 @@ build/windows/
 ```
 
 The final executable uses the Windows GUI subsystem and keeps the AtomJS main process and native window host in one process, includes the embedded application payload and is branded with the configured ICO and version metadata. NSIS is used for the installer when `makensis` is installed. The installer supports per-user or per-machine installation, custom graphics, text, language, shortcuts and install paths.
+
+Set `build.windows.store.enabled` to `true` to additionally generate an MSIX
+package and an `.msixupload` archive. The Store values `identityName` and
+`publisher` must come from Partner Center; they are not interchangeable with
+the normal app ID or display publisher. The Windows SDK's `MakeAppx.exe` and a
+real PNG Store logo are required. MSIX signing uses the same
+`ATOM_WINDOWS_CERTIFICATE`/`signtool` settings as the EXE. The generated
+`.msixupload` contains the MSIX package but no symbols; add an `.appxsym` when
+crash symbols are desired.
+
+Microsoft Store packaging is opt-in and does not change the normal portable
+ZIP/NSIS outputs. The Store can also list an existing offline EXE/MSI
+installer, but MSIX is the path that enables Store package features.
 
 ## macOS output
 

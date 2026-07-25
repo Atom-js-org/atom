@@ -272,6 +272,11 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(windowsDrag, /ReleaseCapture/);
   assert.match(windowsDrag, /SendMessageW/);
   assert.match(windowsDrag, /new Worker\(WINDOWS_DRAG_WORKER/);
+  assert.match(windowsDrag, /CreateRoundRectRgn/);
+  assert.match(windowsDrag, /SetWindowRgn/);
+  assert.match(windowsHost, /_applyWindowShape/);
+  assert.match(windowsHost, /cornerRadius/);
+  assert.match(browserWindow, /cornerRadius/);
   assert.doesNotMatch(windowsHost, /_continueWindowDrag|globalX|offsetX/);
   assert.doesNotMatch(windowsHost, /child_process|spawn\(/);
 });

@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { getWindowsNativeDragApi } = require('./windows-native-drag.cjs');
+const { getWindowsNativeDragApi, getWindowsNativeShapeApi } = require('./windows-native-drag.cjs');
 
 let singleton = null;
 
@@ -12,6 +12,7 @@ class WindowsNativeHost {
     this.binding = null;
     this.application = null;
     this.webContext = null;
+    this.shapeApi = null;
     this.webviewDataDirectory = null;
     this.startPromise = null;
     this.windows = new Map();
@@ -126,10 +127,12 @@ class WindowsNativeHost {
         height: positive(config.height, 600)
       },
       lastDragClick: null,
-      nativeDragPending: false
+      nativeDragPending: false,
+      cornerRadius: normalizeCornerRadius(config.cornerRadius, config.frame === false ? 18 : 0)
     };
     this.windows.set(Number(config.windowId), record);
     this._attachEvents(Number(config.windowId), record);
+    this._applyWindowShape(record);
 
     if (config.show === false) nativeWindow.hide();
     else nativeWindow.show();
@@ -160,6 +163,7 @@ class WindowsNativeHost {
       });
     });
     record.nativeWindow.on('resize', (event) => {
+      this._applyWindowShape(record);
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
         type: 'bounds-changed',
@@ -179,6 +183,13 @@ class WindowsNativeHost {
     record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
     record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
     record.webview.on('title-changed', (event) => emit({ type: 'page-title-updated', title: event.title || '' }));
+  }
+
+  _applyWindowShape(record) {
+    if (!record || record.cornerRadius <= 0) return;
+    if (!this.shapeApi) this.shapeApi = getWindowsNativeShapeApi();
+    if (!this.shapeApi) return;
+    try { this.shapeApi.setRoundedCorners(record.nativeWindow, record.cornerRadius); } catch {}
   }
 
   _startNativeWindowDrag(record, point = null) {
@@ -276,6 +287,13 @@ class WindowsNativeHost {
 function positive(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function normalizeCornerRadius(value, fallback) {
+  if (value === false || value === 0 || value === '0') return 0;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return Math.round(number);
+  return fallback;
 }
 
 function applyWebViewBackground(webview, value, transparent) {

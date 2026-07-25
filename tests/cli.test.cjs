@@ -128,6 +128,7 @@ test('Windows release packaging uses a GUI PE executable, branded metadata and c
   assert.match(buildSource, /certificateDirectory = pe\.dataDirectoryOffset \+ \(8 \* 4\)/);
   assert.match(buildSource, /customizeWindowsExecutable/);
   assert.match(buildSource, /require\('rcedit'\)/);
+  assert.match(buildSource, /signWindowsPayloadBinaries/);
   assert.match(buildSource, /requested-execution-level/);
   assert.match(buildSource, /const registryRoot = installMode === 'machine' \? 'HKLM' : 'HKCU'/);
   assert.match(buildSource, /MUI_HEADERIMAGE_BITMAP/);
@@ -323,6 +324,7 @@ test('configuration schema exposes installer, app bundle and Linux package custo
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'atom.config.schema.json'), 'utf8'));
   const build = schema.properties.build.properties;
   assert.ok(build.windows.properties.installerIcon);
+  assert.ok(build.windows.properties.store);
   assert.ok(build.windows.properties.headerImage);
   assert.ok(build.macos.properties.signingIdentity);
   assert.ok(build.macos.properties.dmg.properties.background);
@@ -342,4 +344,14 @@ test('Windows builds use a prebuilt binding and dev mode does not spawn a second
   assert.match(buildSource, /require\('koffi'\)/);
   assert.match(runSource, /await import\(pathToFileURL\(mainPath\)\.href\)/);
   assert.doesNotMatch(runSource, /spawn\(process\.execPath, \[mainPath\]/);
+});
+
+test('optional Microsoft Store packaging emits an MSIX manifest and upload package', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  const utilsSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'utils.cjs'), 'utf8');
+  assert.match(buildSource, /packageWindowsStore/);
+  assert.match(buildSource, /createStoreManifest/);
+  assert.match(buildSource, /makeappx.exe/);
+  assert.match(buildSource, /\.msixupload/);
+  assert.match(utilsSource, /store: \{/);
 });

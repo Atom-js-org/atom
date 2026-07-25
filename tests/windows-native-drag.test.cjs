@@ -8,13 +8,12 @@ const {
   packScreenPoint,
   constants
 } = require('../packages/atomjs/src/windows-native-drag.cjs');
-const { isSystemDoubleClick } = require('../packages/atomjs/src/windows-native-host.cjs');
+const { isSystemDoubleClick, parseColor } = require('../packages/atomjs/src/windows-native-host.cjs');
 
 function fakeKoffi(overrides = {}) {
   const calls = [];
   const functions = {
     ReleaseCapture: () => { calls.push(['ReleaseCapture']); return true; },
-    PostMessageW: (...args) => { calls.push(['PostMessageW', ...args]); return true; },
     GetAsyncKeyState: () => 0x8000,
     GetCursorPos: (point) => { point.x = -120; point.y = 85; return true; },
     GetDoubleClickTime: () => 500,
@@ -40,16 +39,13 @@ function fakeKoffi(overrides = {}) {
   };
 }
 
-test('Windows drag hands the HWND to the native Windows move loop', () => {
+test('Windows drag starts the native Windows move loop without blocking Node', () => {
   const fake = fakeKoffi();
   const api = new WindowsNativeDragApi(fake.module);
   const win = { getNativeHandleAnyThread: () => 0x1234n };
 
   assert.equal(api.startWindowDrag(win), true);
-  assert.deepEqual(fake.calls, [
-    ['ReleaseCapture'],
-    ['PostMessageW', 0x1234n, constants.WM_NCLBUTTONDOWN, constants.HTCAPTION, packScreenPoint(-120, 85)]
-  ]);
+  assert.deepEqual(fake.calls, [['ReleaseCapture']]);
 });
 
 test('Windows drag does not enter move mode after the left button was released', () => {
@@ -82,4 +78,10 @@ test('Windows title-bar double click follows system time and rectangle settings'
 
   record.lastDragClick = { time: Date.now() - 100, x: 100, y: 50 };
   assert.equal(isSystemDoubleClick(record, { x: 106, y: 50 }, settings), false);
+});
+
+test('Windows transparent WebView backgrounds do not paint an opaque white rectangle', () => {
+  assert.deepEqual(parseColor('#ffffff', true), { r: 255, g: 255, b: 255, a: 0 });
+  assert.deepEqual(parseColor('#123456', false), { r: 18, g: 52, b: 86, a: 255 });
+  assert.deepEqual(parseColor('#12345678', true), { r: 18, g: 52, b: 86, a: 120 });
 });

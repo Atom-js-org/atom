@@ -27,6 +27,7 @@ program
   .description('Build an AtomJS project')
   .argument('<target>', 'current, windows, macos, linux, or all')
   .option('-p, --project <path>', 'project directory', process.cwd())
+  .option('--arch <arch>', 'macOS architecture: arm64, x64, or universal')
   .option('--local', 'build on this machine (default; kept for compatibility)')
   .option('--remote', 'deprecated: remote GitHub Actions builds are disabled')
   .option('--skip-install', 'reuse staged node_modules when possible')

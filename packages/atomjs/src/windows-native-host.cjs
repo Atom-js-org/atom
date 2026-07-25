@@ -113,6 +113,7 @@ class WindowsNativeHost {
       transparent: Boolean(config.transparent),
       webContext: this.webContext
     });
+    applyWebViewBackground(webview, config.backgroundColor, config.transparent === true);
 
     const record = {
       windowId: Number(config.windowId),
@@ -277,6 +278,39 @@ function positive(value, fallback) {
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
+function applyWebViewBackground(webview, value, transparent) {
+  if (!webview || typeof webview.setBackgroundColor !== 'function') return;
+  const color = parseColor(value, transparent);
+  try {
+    webview.setBackgroundColor(color.r, color.g, color.b, color.a);
+  } catch {}
+}
+
+function parseColor(value, transparent = false) {
+  const fallback = { r: 255, g: 255, b: 255, a: transparent ? 0 : 255 };
+  if (transparent && (value == null || String(value).trim().toLowerCase() === '#ffffff')) {
+    return fallback;
+  }
+
+  const text = String(value || '').trim();
+  const match = text.match(/^#([0-9a-f]{3,8})$/i);
+  if (!match) return fallback;
+  const hex = match[1];
+  if (hex.length === 3 || hex.length === 4) {
+    const channels = [...hex].map((channel) => Number.parseInt(channel + channel, 16));
+    return { r: channels[0], g: channels[1], b: channels[2], a: transparent ? channels[3] ?? 0 : channels[3] ?? 255 };
+  }
+  if (hex.length === 6 || hex.length === 8) {
+    return {
+      r: Number.parseInt(hex.slice(0, 2), 16),
+      g: Number.parseInt(hex.slice(2, 4), 16),
+      b: Number.parseInt(hex.slice(4, 6), 16),
+      a: transparent ? Number.parseInt(hex.slice(6, 8) || '00', 16) : Number.parseInt(hex.slice(6, 8) || 'ff', 16)
+    };
+  }
+  return fallback;
+}
+
 function safeScaleFactor(win) {
   try {
     const scale = Number(win.scaleFactor());
@@ -410,5 +444,6 @@ module.exports = {
   isDraggablePoint,
   normalizeDragRegions,
   resolveWritableWebViewDataDirectory,
-  isSystemDoubleClick
+  isSystemDoubleClick,
+  parseColor
 };

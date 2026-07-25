@@ -5,6 +5,7 @@
 ```bash
 atom build windows
 atom build macos
+atom build macos --arch universal
 atom build linux
 ```
 
@@ -75,6 +76,27 @@ Build output is controlled from `atom.config.json`:
 
 Artifact templates support `${productName}`, `${version}`, `${target}`, `${arch}` and `${appId}`.
 
+## Windows 11 and SmartScreen
+
+The Windows executable is a real GUI PE file and does not need Administrator
+rights. Windows 11 SmartScreen/Smart App Control can still block a newly built
+or unsigned executable; that is a Windows trust decision, not a window-runtime
+failure. For a distributable release, sign both the application executable and
+the NSIS installer as the last build step:
+
+```powershell
+$env:ATOM_WINDOWS_SIGN = "1"
+$env:ATOM_WINDOWS_CERTIFICATE = "C:\\keys\\my-app.pfx"
+$env:ATOM_WINDOWS_CERTIFICATE_PASSWORD = "..."
+$env:ATOM_WINDOWS_TIMESTAMP_URL = "http://timestamp.digicert.com"
+atom build windows --local
+```
+
+`signtool.exe` must be installed from the Windows SDK, or its path can be set
+with `ATOM_WINDOWS_SIGNTOOL`. For internal testing, Windows may still require
+the user or administrator to explicitly trust an unsigned build. Signing is
+not a mechanism to bypass enterprise security policy.
+
 ## Windows output
 
 ```text
@@ -109,6 +131,18 @@ build/macos/
 ```
 
 A PNG icon is converted to ICNS with the system `sips` and `iconutil` tools. An existing ICNS can be supplied directly. The bundle supports custom identifiers, names, categories, minimum macOS version, signing identity, entitlements and hardened runtime. DMG creation is optional unless `ATOM_REQUIRE_DMG=1` is set.
+
+`atom build macos` produces an artifact for the current Node architecture. On
+Apple Silicon, `atom build macos --arch universal` builds arm64 and x86_64
+variants and combines the app executable and native window host with `lipo`.
+The command needs a universal Node binary or both architecture-specific Node
+executables; set `ATOMJS_ARM64_NODE` and `ATOMJS_X64_NODE` when they are not
+available on `PATH`. The final `.app`, ZIP and DMG are universal and use the
+same runtime/API on both architectures.
+
+Windows and Linux do not have a macOS-style universal binary format. AtomJS
+therefore emits architecture-specific artifacts for those targets; build once
+on each target architecture when both are required.
 
 ## Linux output
 

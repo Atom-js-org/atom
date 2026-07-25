@@ -28,7 +28,8 @@ test('Windows custom title bars use the native Win32 move loop', () => {
 
   assert.match(host, /_startNativeWindowDrag/);
   assert.match(nativeDrag, /ReleaseCapture/);
-  assert.match(nativeDrag, /PostMessageW/);
+  assert.match(nativeDrag, /SendMessageW/);
+  assert.match(nativeDrag, /new Worker\(WINDOWS_DRAG_WORKER/);
   assert.match(nativeDrag, /WM_NCLBUTTONDOWN/);
   assert.doesNotMatch(host, /_continueWindowDrag|setPosition\([\s\S]*offsetX/);
 });
@@ -53,4 +54,3 @@ test('macOS BrowserWindow bounds use a top-left virtual desktop coordinate syste
   assert.match(host, /@"type": @"bounds-changed"/);
   assert.match(browserWindow, /event\.type === 'bounds-changed'/);
 });
-

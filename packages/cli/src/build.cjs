@@ -47,7 +47,154 @@ async function buildCommand(targetInput, options = {}) {
     throw new Error(`Local target mismatch: this machine is ${host}, but '${target}' was requested. Build that target on a ${target} machine.`);
   }
 
+  const requestedArch = String(options.arch || '').toLowerCase();
+  if (requestedArch && !['arm64', 'x64', 'universal'].includes(requestedArch)) {
+    throw new Error(`Unknown architecture '${options.arch}'. Use arm64, x64, or universal.`);
+  }
+  if (requestedArch === 'universal') {
+    if (target !== 'macos') throw new Error('Universal builds are supported only for macOS. Windows and Linux require architecture-specific builds.');
+    return universalMacOSBuild(project, options);
+  }
+  if (requestedArch && requestedArch !== process.arch) {
+    throw new Error(`This local build is running on ${process.arch}; use 'atom build macos --arch universal' or run the build with a ${requestedArch} Node process.`);
+  }
+
   return localBuild(project, target, options);
+}
+
+async function universalMacOSBuild(project, options = {}) {
+  if (process.platform !== 'darwin') {
+    throw new Error('macOS universal builds must run on macOS.');
+  }
+  if (!commandExists('/usr/bin/arch', ['-h']) || !fs.existsSync('/usr/bin/lipo')) {
+    throw new Error('macOS universal builds require the system arch and lipo tools.');
+  }
+
+  const stageRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'atomjs-universal-'));
+  const archRoots = {
+    arm64: path.join(stageRoot, 'arm64'),
+    x64: path.join(stageRoot, 'x64')
+  };
+  try {
+    for (const arch of ['arm64', 'x64']) {
+      const nodeExecutable = resolveMacNodeExecutable(arch);
+      console.log(`\nBuilding macOS ${arch} slice with ${nodeExecutable}`);
+      await run('/usr/bin/arch', [
+        `-${arch}`,
+        nodeExecutable,
+        path.join(__dirname, '..', 'bin', 'atom.cjs'),
+        'build',
+        'macos',
+        '--project', project.root,
+        '--local'
+      ], {
+        env: {
+          ...process.env,
+          ATOMJS_BUILD_OUTPUT_ROOT: archRoots[arch],
+          ATOMJS_UNIVERSAL_CHILD: '1'
+        },
+        cwd: project.root
+      });
+    }
+
+    const finalRoot = path.join(project.root, 'build', 'macos');
+    await fse.remove(finalRoot);
+    await fse.ensureDir(finalRoot);
+    const armManifest = JSON.parse(await fs.promises.readFile(path.join(archRoots.arm64, 'manifest.json'), 'utf8'));
+    const x64Manifest = JSON.parse(await fs.promises.readFile(path.join(archRoots.x64, 'manifest.json'), 'utf8'));
+    const armApp = path.join(archRoots.arm64, armManifest.run);
+    const x64App = path.join(archRoots.x64, x64Manifest.run);
+    const bundleName = path.basename(armApp, '.app');
+    const finalApp = path.join(finalRoot, `${bundleName}.app`);
+    await fse.copy(armApp, finalApp);
+
+    const executableNames = [
+      path.join('Contents', 'MacOS', sanitizeFilename(project.config.productName)),
+      path.join('Contents', 'MacOS', 'AtomJSWindowHost')
+    ];
+    for (const relative of executableNames) {
+      const output = path.join(finalApp, relative);
+      await run('/usr/bin/lipo', [
+        '-create',
+        path.join(armApp, relative),
+        path.join(x64App, relative),
+        '-output',
+        output
+      ]);
+      await fs.promises.chmod(output, 0o755);
+    }
+
+    await sanitizeMacBundle(finalApp);
+    if (hasMacCodeSigningTool()) {
+      const signingEnvironment = { ...process.env, COPYFILE_DISABLE: '1' };
+      const mainExecutable = path.join(finalApp, 'Contents', 'MacOS', sanitizeFilename(project.config.productName));
+      const nativeHost = path.join(finalApp, 'Contents', 'MacOS', 'AtomJSWindowHost');
+      await run('/usr/bin/codesign', codesignArguments(project, nativeHost), { env: signingEnvironment });
+      await run('/usr/bin/codesign', codesignArguments(project, mainExecutable), { env: signingEnvironment });
+      await sanitizeMacBundle(finalApp);
+      await run('/usr/bin/codesign', codesignArguments(project, finalApp, true), { env: signingEnvironment });
+      await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', finalApp], { env: signingEnvironment });
+    }
+
+    const artifactBase = renderArtifactBase(project, 'macos', `${project.config.productName}-${project.packageJson.version || '0.0.0'}-macos-universal`);
+    const outputs = [];
+    const zipPath = path.join(finalRoot, `${artifactBase}.zip`);
+    await run('ditto', ['--norsrc', '-c', '-k', '--keepParent', finalApp, zipPath], {
+      env: { ...process.env, COPYFILE_DISABLE: '1' }
+    });
+    outputs.push(zipPath);
+
+    const config = project.config.build.macos;
+    if (config.dmg.enabled && commandExists('/usr/bin/hdiutil', ['help'])) {
+      const dmgPath = path.join(finalRoot, `${artifactBase}-installer.dmg`);
+      const dmgRoot = path.join(stageRoot, 'dmg-root');
+      await fse.ensureDir(dmgRoot);
+      await fse.copy(finalApp, path.join(dmgRoot, `${bundleName}.app`));
+      await fs.promises.symlink('/Applications', path.join(dmgRoot, 'Applications'));
+      await sanitizeMacBundle(dmgRoot);
+      await run('/usr/bin/hdiutil', [
+        'create', '-volname', config.dmg.volumeName,
+        '-srcfolder', dmgRoot, '-ov', '-format', 'UDZO', dmgPath
+      ], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+      outputs.push(dmgPath);
+    }
+
+    const packedFilesSource = path.join(archRoots.arm64, 'packed-files.json');
+    if (fs.existsSync(packedFilesSource)) await fse.copy(packedFilesSource, path.join(finalRoot, 'packed-files.json'));
+    const manifest = {
+      atomjsVersion: cliPackageVersion,
+      target: 'macos',
+      arch: 'universal',
+      productName: project.config.productName,
+      appId: project.config.appId,
+      createdAt: new Date().toISOString(),
+      run: path.relative(finalRoot, finalApp),
+      unpacked: path.relative(finalRoot, finalApp),
+      outputs: outputs.map((file) => path.relative(finalRoot, file)),
+      slices: { arm64: armManifest, x64: x64Manifest }
+    };
+    await fs.promises.writeFile(path.join(finalRoot, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    console.log('\nUniversal macOS build complete:');
+    console.log(`  ${path.relative(project.root, finalApp)}`);
+    for (const output of outputs) console.log(`  ${path.relative(project.root, output)}`);
+    return manifest;
+  } finally {
+    await fse.remove(stageRoot);
+  }
+}
+
+function resolveMacNodeExecutable(arch) {
+  const configured = process.env[arch === 'arm64' ? 'ATOMJS_ARM64_NODE' : 'ATOMJS_X64_NODE'];
+  if (configured) return path.resolve(configured);
+  if ((arch === 'arm64' && process.arch === 'arm64') || (arch === 'x64' && process.arch === 'x64')) return process.execPath;
+  const candidates = arch === 'x64'
+    ? ['/usr/local/bin/node', '/opt/homebrew/bin/node']
+    : ['/opt/homebrew/bin/node', '/usr/local/bin/node'];
+  const candidate = candidates.find((entry) => fs.existsSync(entry));
+  if (!candidate) {
+    throw new Error(`Could not find a Node executable for macOS ${arch}. Set ${arch === 'arm64' ? 'ATOMJS_ARM64_NODE' : 'ATOMJS_X64_NODE'}.`);
+  }
+  return candidate;
 }
 
 async function localBuild(project, target, options = {}) {
@@ -55,7 +202,11 @@ async function localBuild(project, target, options = {}) {
     throw new Error(`Local target mismatch: host is ${hostTarget()}, requested ${target}`);
   }
 
-  const buildRoot = path.join(project.root, 'build', target);
+  const buildRoot = process.env.ATOMJS_BUILD_OUTPUT_ROOT
+    ? path.resolve(process.env.ATOMJS_BUILD_OUTPUT_ROOT)
+    : options.outputRoot
+      ? path.resolve(options.outputRoot)
+      : path.join(project.root, 'build', target);
   const unpacked = path.join(buildRoot, 'portable');
   const appDir = null;
   const productName = sanitizeFilename(project.config.productName);
@@ -394,6 +545,7 @@ async function createSeaLauncher({ executablePath, appDir, target, productName, 
 
   if (target === 'windows') {
     await setWindowsGuiSubsystem(executablePath);
+    await signWindowsArtifact(executablePath, 'the application executable');
   } else {
     await fs.promises.chmod(executablePath, 0o755);
   }
@@ -875,11 +1027,46 @@ SectionEnd
   const makensis = resolveNsisExecutable();
   if (makensis) {
     await run(makensis, [nsisPath]);
-    if (fs.existsSync(installerPath)) outputs.push(installerPath);
+    if (fs.existsSync(installerPath)) {
+      await signWindowsArtifact(installerPath, 'the NSIS installer');
+      outputs.push(installerPath);
+    }
   } else {
     console.warn('NSIS was not found; installer.nsi was generated but the .exe installer was skipped.');
   }
   return outputs;
+}
+
+async function signWindowsArtifact(filePath, label) {
+  const certificate = process.env.ATOM_WINDOWS_CERTIFICATE;
+  const required = process.env.ATOM_WINDOWS_SIGN === '1';
+  if (!certificate) {
+    if (required) {
+      throw new Error(`Windows signing is required, but ATOM_WINDOWS_CERTIFICATE is not set for ${label}.`);
+    }
+    console.warn(`Windows ${label} is unsigned. Set ATOM_WINDOWS_CERTIFICATE and ATOM_WINDOWS_SIGN=1 for SmartScreen-ready release signing.`);
+    return false;
+  }
+
+  const signTool = process.env.ATOM_WINDOWS_SIGNTOOL || (commandExists('signtool', ['/help']) ? 'signtool' : null);
+  if (!signTool) {
+    throw new Error('ATOM_WINDOWS_CERTIFICATE is set, but signtool was not found. Install the Windows SDK or set ATOM_WINDOWS_SIGNTOOL.');
+  }
+
+  const args = [
+    'sign',
+    '/fd', 'sha256',
+    '/f', certificate
+  ];
+  if (process.env.ATOM_WINDOWS_CERTIFICATE_PASSWORD) {
+    args.push('/p', process.env.ATOM_WINDOWS_CERTIFICATE_PASSWORD);
+  }
+  if (process.env.ATOM_WINDOWS_TIMESTAMP_URL) {
+    args.push('/tr', process.env.ATOM_WINDOWS_TIMESTAMP_URL, '/td', 'sha256');
+  }
+  args.push(filePath);
+  await run(signTool, args);
+  return true;
 }
 
 function resolveNsisExecutable() {

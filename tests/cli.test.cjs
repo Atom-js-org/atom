@@ -18,6 +18,14 @@ test('build target validation matches the documented CLI', () => {
   assert.throws(() => validateTarget('android'), /Unknown build target/);
 });
 
+test('macOS universal builds combine arm64 and x64 slices', () => {
+  const buildSource = fs.readFileSync(path.join(__dirname, '..', 'packages', 'cli', 'src', 'build.cjs'), 'utf8');
+  assert.match(buildSource, /requestedArch === 'universal'/);
+  assert.match(buildSource, /resolveMacNodeExecutable/);
+  assert.match(buildSource, /lipo/);
+  assert.match(buildSource, /archRoots/);
+});
+
 test('atom init creates a local-first Electron-like project without requiring GitHub Actions', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atomjs-init-'));
   const projectRoot = path.join(tempRoot, 'sample-app');

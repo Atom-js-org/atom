@@ -178,7 +178,11 @@ class WindowsNativeHost {
       });
     });
     record.nativeWindow.on('resize', (event) => {
-      if (!record.nativeResizePending) this._scheduleWindowShape(record, 16, true);
+      if (!this._trackNativeWindowResize(record)) {
+        // Programmatic resizes and maximize/restore can emit several events.
+        // Reapply the exact HRGN only after the final size has settled.
+        this._scheduleWindowShape(record, 120, true);
+      }
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
         type: 'bounds-changed',
@@ -193,11 +197,6 @@ class WindowsNativeHost {
       if (Number(event.button) !== 0) return;
       const point = physicalPoint(event);
       if (!point) return;
-      const resizeHitTest = resizeHitTestForPoint(record, point);
-      if (resizeHitTest) {
-        this._startNativeWindowResize(record, resizeHitTest);
-        return;
-      }
       if (!isDraggablePoint(record, point)) return;
       this._startNativeWindowDrag(record, point);
     });
@@ -269,18 +268,21 @@ class WindowsNativeHost {
     return true;
   }
 
-  _startNativeWindowResize(record, hitTest) {
-    if (record.nativeDragPending || record.nativeResizePending) return true;
+  _trackNativeWindowResize(record) {
+    if (!record || record.nativeResizePending) return Boolean(record);
     const nativeDrag = getWindowsNativeDragApi();
     if (!nativeDrag) return false;
-    this._suspendWindowShape(record);
+    let leftButtonDown = false;
+    try { leftButtonDown = nativeDrag.isLeftButtonDown(); } catch {}
+    if (!leftButtonDown) return false;
+
+    // Tao already handles WM_NCHITTEST for undecorated resizable windows.
+    // Once its native resize loop emits the first resize event, remove the
+    // exact HRGN until the pointer is released. Reapplying a region on every
+    // WM_SIZE is what caused Windows 11 resizing to jitter and get stuck.
     record.nativeResizePending = true;
-    if (!nativeDrag.startWindowResize(record.nativeWindow, hitTest)) {
-      record.nativeResizePending = false;
-      this._scheduleWindowShape(record, 16, true);
-      return false;
-    }
-    record.nativeDragPending = true;
+    record.nativeDragPending = false;
+    this._suspendWindowShape(record);
     this._waitForNativeResizeEnd(record, nativeDrag);
     return true;
   }
@@ -304,7 +306,7 @@ class WindowsNativeHost {
     record.resizeEndTimer = null;
     record.nativeResizePending = false;
     record.nativeDragPending = false;
-    this._scheduleWindowShape(record, 16, true);
+    this._scheduleWindowShape(record, 80, true);
   }
 
   _suspendWindowShape(record) {
@@ -472,34 +474,6 @@ function physicalPoint(event) {
   const y = Number(event && event.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return { x, y };
-}
-
-function resizeHitTestForPoint(record, point) {
-  if (!record || record.frame || !record.resizable || record.fullscreen) return 0;
-  try {
-    if (record.nativeWindow.isMaximized()) return 0;
-    const size = record.nativeWindow.getInnerSize(false);
-    const width = Number(size && size.width);
-    const height = Number(size && size.height);
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 0;
-
-    // BrowserWindow mouse coordinates are physical pixels. Use an 8 CSS-pixel
-    // target scaled to the active monitor so resize works on HiDPI displays.
-    const edge = Math.max(6, Math.round(8 * safeScaleFactor(record.nativeWindow)));
-    const left = point.x <= edge;
-    const right = point.x >= width - edge;
-    const top = point.y <= edge;
-    const bottom = point.y >= height - edge;
-    if (top && left) return 13;
-    if (top && right) return 14;
-    if (bottom && left) return 16;
-    if (bottom && right) return 17;
-    if (left) return 10;
-    if (right) return 11;
-    if (top) return 12;
-    if (bottom) return 15;
-  } catch {}
-  return 0;
 }
 
 function normalizeDragRegions(regions) {

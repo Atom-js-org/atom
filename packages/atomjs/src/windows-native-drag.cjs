@@ -5,6 +5,9 @@ const HTCAPTION = 2;
 const VK_LBUTTON = 0x01;
 const SM_CXDOUBLECLK = 36;
 const SM_CYDOUBLECLK = 37;
+const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+const DWMWCP_DEFAULT = 0;
+const DWMWCP_ROUND = 2;
 
 let singleton = null;
 let shapeSingleton = null;
@@ -65,60 +68,48 @@ class WindowsNativeShapeApi {
       throw new TypeError('A Koffi module is required.');
     }
 
-    const user32 = koffi.load('user32.dll');
-    const gdi32 = koffi.load('gdi32.dll');
-    this.createRoundRectRgn = gdi32.func(
+    const dwmapi = koffi.load('dwmapi.dll');
+    this.dwmSetWindowAttribute = dwmapi.func(
       '__stdcall',
-      'CreateRoundRectRgn',
-      'void *',
-      ['int', 'int', 'int', 'int', 'int', 'int']
-    );
-    this.setWindowRgn = user32.func(
-      '__stdcall',
-      'SetWindowRgn',
+      'DwmSetWindowAttribute',
       'int',
-      ['void *', 'void *', 'bool']
+      ['void *', 'uint32_t', 'uint32_t *', 'uint32_t']
     );
-    this.deleteObject = gdi32.func('__stdcall', 'DeleteObject', 'bool', ['void *']);
   }
 
   setRoundedCorners(nativeWindow, radius) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n) return false;
+    if (Number(radius) <= 0) return this.clearRoundedCorners(nativeWindow);
 
-    const size = nativeWindowSize(nativeWindow);
-    if (!size || size.width < 2 || size.height < 2) return false;
-
-    const clampedRadius = Math.max(0, Math.min(
-      Math.round(Number(radius) || 0),
-      Math.floor(Math.min(size.width, size.height) / 2)
-    ));
-    if (clampedRadius === 0) return false;
-
-    const region = this.createRoundRectRgn(
-      0,
-      0,
-      size.width + 1,
-      size.height + 1,
-      clampedRadius * 2,
-      clampedRadius * 2
-    );
-    if (!region) return false;
-
-    const applied = Number(this.setWindowRgn(handle, region, true)) !== 0;
-    if (!applied) {
-      try { this.deleteObject(region); } catch {}
+    // DWM owns the non-client frame and adjusts it during live resize,
+    // maximization, DPI changes and fullscreen transitions. SetWindowRgn does
+    // not, which is why a manual region caused white seams and broken resizing.
+    try {
+      return Number(this.dwmSetWindowAttribute(
+        handle,
+        DWMWA_WINDOW_CORNER_PREFERENCE,
+        [DWMWCP_ROUND],
+        4
+      )) === 0;
+    } catch {
+      return false;
     }
-    return applied;
   }
 
   clearRoundedCorners(nativeWindow) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n) return false;
-    // Passing NULL removes the HRGN owned by the window. Maximized and
-    // fullscreen windows must be rectangular or DWM can expose a bright
-    // backdrop through the clipped corners.
-    try { return Number(this.setWindowRgn(handle, null, true)) !== 0; } catch { return false; }
+    try {
+      return Number(this.dwmSetWindowAttribute(
+        handle,
+        DWMWA_WINDOW_CORNER_PREFERENCE,
+        [DWMWCP_DEFAULT],
+        4
+      )) === 0;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -193,29 +184,21 @@ function getWindowsNativeShapeApi() {
   }
 }
 
-function nativeWindowSize(nativeWindow) {
-  try {
-    const size = nativeWindow.getOuterSize(false);
-    const width = Math.round(Number(size && size.width));
-    const height = Math.round(Number(size && size.height));
-    if (width > 0 && height > 0) return { width, height };
-  } catch {}
-  return null;
-}
-
 module.exports = {
   WindowsNativeDragApi,
   WindowsNativeShapeApi,
   getWindowsNativeDragApi,
   getWindowsNativeShapeApi,
   nativeWindowHandle,
-  nativeWindowSize,
   packScreenPoint,
   constants: {
     WM_NCLBUTTONDOWN,
     HTCAPTION,
     VK_LBUTTON,
     SM_CXDOUBLECLK,
-    SM_CYDOUBLECLK
+    SM_CYDOUBLECLK,
+    DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DEFAULT,
+    DWMWCP_ROUND
   }
 };

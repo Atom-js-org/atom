@@ -193,6 +193,11 @@ class WindowsNativeHost {
   }
 
   _startNativeWindowDrag(record, point = null) {
+    // SpaceClient and Electron-compatible apps may both request a drag: one
+    // through app-region metadata and one through startDrag(). Do not enqueue
+    // two Win32 move messages for the same mouse press.
+    if (record.nativeDragPending) return true;
+
     const nativeDrag = getWindowsNativeDragApi();
     if (!nativeDrag) return false;
 
@@ -305,10 +310,12 @@ function applyWebViewBackground(webview, value, transparent) {
 }
 
 function parseColor(value, transparent = false) {
-  const fallback = { r: 255, g: 255, b: 255, a: transparent ? 0 : 255 };
-  if (transparent && (value == null || String(value).trim().toLowerCase() === '#ffffff')) {
-    return fallback;
-  }
+  const fallback = {
+    r: transparent ? 0 : 255,
+    g: transparent ? 0 : 255,
+    b: transparent ? 0 : 255,
+    a: transparent ? 0 : 255
+  };
 
   const text = String(value || '').trim();
   const match = text.match(/^#([0-9a-f]{3,8})$/i);
@@ -316,15 +323,17 @@ function parseColor(value, transparent = false) {
   const hex = match[1];
   if (hex.length === 3 || hex.length === 4) {
     const channels = [...hex].map((channel) => Number.parseInt(channel + channel, 16));
-    return { r: channels[0], g: channels[1], b: channels[2], a: transparent ? channels[3] ?? 0 : channels[3] ?? 255 };
+    const color = { r: channels[0], g: channels[1], b: channels[2], a: transparent ? channels[3] ?? 0 : channels[3] ?? 255 };
+    return color.a === 0 ? { r: 0, g: 0, b: 0, a: 0 } : color;
   }
   if (hex.length === 6 || hex.length === 8) {
-    return {
+    const color = {
       r: Number.parseInt(hex.slice(0, 2), 16),
       g: Number.parseInt(hex.slice(2, 4), 16),
       b: Number.parseInt(hex.slice(4, 6), 16),
       a: transparent ? Number.parseInt(hex.slice(6, 8) || '00', 16) : Number.parseInt(hex.slice(6, 8) || 'ff', 16)
     };
+    return color.a === 0 ? { r: 0, g: 0, b: 0, a: 0 } : color;
   }
   return fallback;
 }

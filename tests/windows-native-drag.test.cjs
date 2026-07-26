@@ -14,6 +14,7 @@ function fakeKoffi(overrides = {}) {
   const calls = [];
   const functions = {
     ReleaseCapture: () => { calls.push(['ReleaseCapture']); return true; },
+    PostMessageW: () => { calls.push(['PostMessageW']); return true; },
     GetAsyncKeyState: () => 0x8000,
     GetCursorPos: (point) => { point.x = -120; point.y = 85; return true; },
     GetDoubleClickTime: () => 500,
@@ -45,7 +46,7 @@ test('Windows drag starts the native Windows move loop without blocking Node', (
   const win = { getNativeHandleAnyThread: () => 0x1234n };
 
   assert.equal(api.startWindowDrag(win), true);
-  assert.deepEqual(fake.calls, [['ReleaseCapture']]);
+  assert.deepEqual(fake.calls, [['ReleaseCapture'], ['PostMessageW']]);
 });
 
 test('Windows drag does not enter move mode after the left button was released', () => {
@@ -81,7 +82,7 @@ test('Windows title-bar double click follows system time and rectangle settings'
 });
 
 test('Windows transparent WebView backgrounds do not paint an opaque white rectangle', () => {
-  assert.deepEqual(parseColor('#ffffff', true), { r: 255, g: 255, b: 255, a: 0 });
+  assert.deepEqual(parseColor('#ffffff', true), { r: 0, g: 0, b: 0, a: 0 });
   assert.deepEqual(parseColor('#123456', false), { r: 18, g: 52, b: 86, a: 255 });
   assert.deepEqual(parseColor('#12345678', true), { r: 18, g: 52, b: 86, a: 120 });
 });

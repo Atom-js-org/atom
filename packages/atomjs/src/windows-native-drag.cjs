@@ -5,7 +5,6 @@ const HTCAPTION = 2;
 const VK_LBUTTON = 0x01;
 const SM_CXDOUBLECLK = 36;
 const SM_CYDOUBLECLK = 37;
-const { Worker } = require('node:worker_threads');
 
 let singleton = null;
 let shapeSingleton = null;
@@ -20,6 +19,12 @@ class WindowsNativeDragApi {
     const user32 = koffi.load('user32.dll');
     const pointType = koffi.struct('ATOMJS_WIN32_POINT', { x: 'long', y: 'long' });
     this.releaseCapture = user32.func('__stdcall', 'ReleaseCapture', 'bool', []);
+    this.postMessageW = user32.func(
+      '__stdcall',
+      'PostMessageW',
+      'bool',
+      ['void *', 'uint32_t', 'uintptr_t', 'intptr_t']
+    );
     this.getAsyncKeyState = user32.func('__stdcall', 'GetAsyncKeyState', 'int16_t', ['int']);
     this.getCursorPos = user32.func('__stdcall', 'GetCursorPos', 'bool', [koffi.out(koffi.pointer(pointType))]);
     this.getDoubleClickTime = user32.func('__stdcall', 'GetDoubleClickTime', 'uint32_t', []);
@@ -43,28 +48,14 @@ class WindowsNativeDragApi {
     if (handle === 0n || !this.isLeftButtonDown()) return false;
 
     // Capture the click location before handing the window to DefWindowProc.
-    // Windows uses this point as the anchor for the native move loop. Sending
-    // asynchronously with PostMessageW can process the message after the cursor
-    // has moved, which is what causes the visible jump on Windows 11.
+    // This is the stable Windows 10/11 path used by the known-good .4 build.
+    // PostMessageW keeps the UI thread out of the modal move loop while Windows
+    // still owns pointer movement, snapping and DPI transitions.
     const cursor = {};
     const cursorPosition = this.getCursorPos(cursor) ? packScreenPoint(cursor.x, cursor.y) : 0n;
 
-    // SendMessageW blocks until the user releases the mouse. Keep that wait in a
-    // short-lived worker so the AtomJS/renderer event loop remains responsive.
     this.releaseCapture();
-    const worker = new Worker(WINDOWS_DRAG_WORKER, {
-      eval: true,
-      workerData: {
-        handle,
-        message: WM_NCLBUTTONDOWN,
-        hitTest: HTCAPTION,
-        cursorPosition
-      }
-    });
-    worker.unref();
-    worker.once('error', () => {});
-    worker.once('exit', () => worker.removeAllListeners());
-    return true;
+    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, HTCAPTION, cursorPosition));
   }
 }
 
@@ -121,29 +112,6 @@ class WindowsNativeShapeApi {
     return applied;
   }
 }
-
-const WINDOWS_DRAG_WORKER = String.raw`
-  const { workerData } = require('node:worker_threads');
-  try {
-    const koffi = require('koffi');
-    const user32 = koffi.load('user32.dll');
-    const releaseCapture = user32.func('__stdcall', 'ReleaseCapture', 'bool', []);
-    const sendMessageW = user32.func(
-      '__stdcall',
-      'SendMessageW',
-      'intptr_t',
-      ['void *', 'uint32_t', 'uintptr_t', 'intptr_t']
-    );
-    releaseCapture();
-    sendMessageW(
-      BigInt(workerData.handle),
-      workerData.message,
-      workerData.hitTest,
-      BigInt(workerData.cursorPosition)
-    );
-  } catch {}
-`;
-
 
 function packScreenPoint(x, y) {
   const xWord = BigInt.asUintN(16, BigInt(Math.trunc(Number(x) || 0)));
@@ -240,6 +208,5 @@ module.exports = {
     VK_LBUTTON,
     SM_CXDOUBLECLK,
     SM_CYDOUBLECLK
-  },
-  WINDOWS_DRAG_WORKER
+  }
 };

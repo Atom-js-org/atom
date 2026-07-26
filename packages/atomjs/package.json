@@ -1,6 +1,6 @@
 {
   "name": "@atom-js-org/runtime",
-  "version": "0.5.3-alpha.7",
+  "version": "0.5.3-alpha.8",
   "description": "Electron-like desktop runtime powered by the operating system WebView.",
   "main": "src/index.cjs",
   "types": "index.d.ts",

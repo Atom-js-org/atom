@@ -6,6 +6,20 @@
 
 > **Windows:** AtomJS uses a prebuilt WebView2 binding. CMake and Visual Studio Build Tools are not required for normal installation or builds, and the project may live in any writable directory. AtomJS itself stays in one application process; Microsoft WebView2 can still create its own sandboxed renderer/GPU processes.
 
+Each Windows application receives its own WebView2 profile and AtomJS
+`userData` directory. The profile key includes the configured `appId` plus the
+development project or packaged product identity, so cookies, OAuth sessions
+and local storage are not accidentally shared between unrelated AtomJS apps.
+Keep `appId` unique for every product. SSO performed by an external system
+browser or Windows account provider is controlled by Windows and is separate
+from AtomJS's WebView2 profile.
+
+AtomJS Windows GUI builds also default child processes to `windowsHide: true`.
+This prevents console windows from flashing when libraries such as
+`minecraft-launcher-core` start `java.exe`. Pass `windowsHide: false`
+explicitly, or set `ATOM_SHOW_CHILD_CONSOLES=1`, when a visible child console is
+intentional.
+
 **Build fast, lightweight cross-platform desktop apps with JavaScript, HTML, and CSS.**
 
 AtomJS keeps the Electron development model while rendering with the operating system WebView instead of shipping a private Chromium runtime in every application.

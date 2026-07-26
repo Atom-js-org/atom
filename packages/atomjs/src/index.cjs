@@ -1,5 +1,9 @@
 'use strict';
 
+const { installWindowsChildProcessDefaults } = require('./windows-child-process.cjs');
+
+installWindowsChildProcessDefaults();
+
 const app = require('./app.cjs');
 const { BrowserWindow } = require('./browser-window.cjs');
 const ipcMain = require('./ipc-main.cjs');

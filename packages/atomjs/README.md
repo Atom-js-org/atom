@@ -16,6 +16,11 @@ Supported window options include parent/modal relationships, frame and resize co
 
 AtomJS does not install or execute Electron and does not bundle a private Chromium copy. Windows uses WebView2, macOS uses WKWebView, and Linux uses WebKitGTK.
 
+Windows WebView2 and `userData` profiles are isolated per application identity.
+Windows GUI applications also hide child-process console windows by default;
+pass `windowsHide: false` or set `ATOM_SHOW_CHILD_CONSOLES=1` to show one
+intentionally.
+
 Most applications should install the Electron-compatible alias:
 
 ```bash

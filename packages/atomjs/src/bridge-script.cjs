@@ -1,8 +1,9 @@
 'use strict';
 
-function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
+function generateBridgeScript({ websocketUrl, preloadCode = '', nativeResize = false }) {
   const endpoint = JSON.stringify(websocketUrl);
   const preload = JSON.stringify(preloadCode);
+  const resizeEnabled = JSON.stringify(Boolean(nativeResize));
 
   return `
 (() => {
@@ -10,6 +11,7 @@ function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
 
   const endpoint = ${endpoint};
   const preloadSource = ${preload};
+  const nativeResizeEnabled = ${resizeEnabled};
   const channelListeners = new Map();
   const pendingInvocations = new Map();
   const outboundQueue = [];
@@ -38,6 +40,36 @@ function generateBridgeScript({ websocketUrl, preloadCode = '' }) {
       socket.send(outboundQueue.shift());
     }
   }
+
+  function windowResizeDirection(x, y) {
+    if (!nativeResizeEnabled) return '';
+    const edge = 8;
+    const width = Math.max(0, Number(window.innerWidth) || 0);
+    const height = Math.max(0, Number(window.innerHeight) || 0);
+    const left = x >= 0 && x <= edge;
+    const right = x >= width - edge && x <= width;
+    const top = y >= 0 && y <= edge;
+    const bottom = y >= height - edge && y <= height;
+    if (top && left) return 'north-west';
+    if (top && right) return 'north-east';
+    if (bottom && left) return 'south-west';
+    if (bottom && right) return 'south-east';
+    if (left) return 'west';
+    if (right) return 'east';
+    if (top) return 'north';
+    if (bottom) return 'south';
+    return '';
+  }
+
+  window.addEventListener('pointerdown', (event) => {
+    if (!nativeResizeEnabled || event.button !== 0 || event.isPrimary === false) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const direction = windowResizeDirection(Number(event.clientX), Number(event.clientY));
+    if (!direction) return;
+    sendNow({ type: 'system', command: 'start-window-resize', direction });
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 
   function normalizeAppRegion(value) {
     const normalized = String(value || '').trim().toLowerCase();

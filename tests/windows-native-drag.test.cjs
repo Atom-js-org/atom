@@ -9,7 +9,11 @@ const {
   packScreenPoint,
   constants
 } = require('../packages/atomjs/src/windows-native-drag.cjs');
-const { isSystemDoubleClick, parseColor } = require('../packages/atomjs/src/windows-native-host.cjs');
+const {
+  isSystemDoubleClick,
+  parseColor,
+  hasFiniteCoordinate
+} = require('../packages/atomjs/src/windows-native-host.cjs');
 
 function fakeKoffi(overrides = {}) {
   const calls = [];
@@ -83,6 +87,16 @@ test('Windows drag does not enter move mode after the left button was released',
   assert.deepEqual(fake.calls, []);
 });
 
+test('renderer edge presses start the requested native Windows resize loop', () => {
+  const fake = fakeKoffi();
+  const api = new WindowsNativeDragApi(fake.module);
+  const win = { getNativeHandleAnyThread: () => 0x1234n };
+
+  assert.equal(api.startWindowResize(win, 'south-east'), true);
+  assert.equal(api.startWindowResize(win, 'invalid'), false);
+  assert.deepEqual(fake.calls, [['ReleaseCapture'], ['PostMessageW']]);
+});
+
 test('Win32 screen coordinates preserve negative multi-monitor positions', () => {
   const packed = packScreenPoint(-120, -45);
   assert.equal(Number(BigInt.asIntN(16, packed)), -120);
@@ -131,4 +145,12 @@ test('Windows transparent WebView backgrounds do not paint an opaque white recta
   assert.deepEqual(parseColor('#ffffff', true), { r: 0, g: 0, b: 0, a: 0 });
   assert.deepEqual(parseColor('#123456', false), { r: 18, g: 52, b: 86, a: 255 });
   assert.deepEqual(parseColor('#12345678', true), { r: 18, g: 52, b: 86, a: 120 });
+});
+
+test('missing Windows coordinates center the window instead of forcing it to 0,0', () => {
+  assert.equal(hasFiniteCoordinate(null), false);
+  assert.equal(hasFiniteCoordinate(undefined), false);
+  assert.equal(hasFiniteCoordinate(''), false);
+  assert.equal(hasFiniteCoordinate(0), true);
+  assert.equal(hasFiniteCoordinate(-120), true);
 });

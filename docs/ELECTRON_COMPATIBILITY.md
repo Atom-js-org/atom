@@ -53,6 +53,12 @@ The system WebView is not a Node.js process. Therefore arbitrary Node modules ar
 
 MSMC's Electron GUI path creates a `BrowserWindow`, calls `setMenu(null)`, loads an OAuth URL, reads `webContents.getURL()`, and listens for repeated `did-finish-load` events. AtomJS implements those calls, reports WKWebView navigations natively, and explicitly activates Windows OAuth windows so the login UI is not hidden behind the main application. Applications can also pass `parent` and `modal` for native owned-window behavior.
 
+On Windows, every AtomJS product uses an isolated WebView2/user-data profile
+derived from its `appId` and project/product identity. This prevents MSMC and
+other OAuth libraries from accidentally reusing cookies or tokens belonging
+to a different AtomJS application. External-browser and Windows-account SSO
+remain subject to the operating system's own account policies.
+
 ## What “Electron-compatible” means
 
 - Same module name for existing dependencies.

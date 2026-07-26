@@ -31,12 +31,15 @@ test('preload bridge exposes contextBridge and ipcRenderer compatibility', () =>
 test('renderer bridge maps Electron-style app regions to native drag-region updates', () => {
   const script = generateBridgeScript({
     websocketUrl: 'ws://127.0.0.1:1234/__atom/ws',
-    preloadCode: ''
+    preloadCode: '',
+    nativeResize: true
   });
   assert.match(script, /-webkit-app-region/);
   assert.match(script, /data-atom-drag-region/);
   assert.match(script, /data-atom-no-drag/);
   assert.match(script, /command: 'set-window-drag-regions'/);
+  assert.match(script, /command: 'start-window-resize'/);
+  assert.match(script, /windowResizeDirection/);
   assert.doesNotMatch(script, /setBounds/);
 });
 
@@ -214,8 +217,13 @@ test('BrowserWindow starts one native drag operation instead of renderer-driven 
   win._nativeHost = { send(message) { messages.push(message); } };
 
   win.startDrag();
+  win._startNativeResize('south-east');
 
-  assert.deepEqual(messages, [{ command: 'start-drag', windowId: win.id }]);
+  assert.deepEqual(messages, [
+    { command: 'start-drag', windowId: win.id },
+    { command: 'start-resize', direction: 'south-east', windowId: win.id }
+  ]);
+  assert.equal(win._startNativeResize('invalid'), false);
   win.destroy();
 });
 
@@ -233,6 +241,7 @@ test('macOS custom title bars use AppKit native window dragging', () => {
   assert.match(source, /performWindowDragWithEvent:event/);
   assert.match(source, /command isEqualToString:@"start-drag"/);
   assert.match(bridgeServer, /message\.command === 'set-window-drag-regions'/);
+  assert.match(bridgeServer, /message\.command === 'start-window-resize'/);
 });
 
 test('macOS host maps modal, title-bar and visual options to AppKit', () => {
@@ -273,11 +282,13 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(windowsHost, /isMaximized\(\)/);
   assert.doesNotMatch(windowsHost, /resizeHitTestForPoint|_startNativeWindowResize/);
   assert.match(windowsHost, /_trackNativeWindowResize/);
+  assert.match(windowsHost, /_startRendererWindowResize/);
   assert.match(windowsHost, /getWindowsNativeDragApi\(\)/);
   assert.match(windowsDrag, /WM_NCLBUTTONDOWN/);
   assert.match(windowsDrag, /ReleaseCapture/);
   assert.match(windowsDrag, /PostMessageW/);
-  assert.doesNotMatch(windowsDrag, /HTBOTTOMRIGHT|startWindowResize/);
+  assert.match(windowsDrag, /startWindowResize/);
+  assert.match(windowsDrag, /'south-east': 17/);
   assert.doesNotMatch(windowsDrag, /new Worker\(WINDOWS_DRAG_WORKER/);
   assert.match(windowsDrag, /DwmSetWindowAttribute/);
   assert.match(windowsDrag, /CreateRoundRectRgn/);
@@ -286,6 +297,7 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(windowsHost, /nativeResizePending/);
   assert.match(windowsHost, /_suspendWindowShape/);
   assert.match(windowsHost, /cornerRadius/);
+  assert.match(windowsHost, /appIdentity\.profileKey/);
   assert.match(browserWindow, /cornerRadius/);
   assert.doesNotMatch(windowsHost, /_continueWindowDrag|globalX|offsetX/);
   assert.doesNotMatch(windowsHost, /child_process|spawn\(/);

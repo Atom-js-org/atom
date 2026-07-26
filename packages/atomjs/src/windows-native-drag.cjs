@@ -2,6 +2,16 @@
 
 const WM_NCLBUTTONDOWN = 0x00A1;
 const HTCAPTION = 2;
+const RESIZE_HIT_TESTS = Object.freeze({
+  west: 10,
+  east: 11,
+  north: 12,
+  'north-west': 13,
+  'north-east': 14,
+  south: 15,
+  'south-west': 16,
+  'south-east': 17
+});
 const VK_LBUTTON = 0x01;
 const SM_CXDOUBLECLK = 36;
 const SM_CYDOUBLECLK = 37;
@@ -47,6 +57,16 @@ class WindowsNativeDragApi {
   }
 
   startWindowDrag(nativeWindow) {
+    return this.startWindowInteraction(nativeWindow, HTCAPTION);
+  }
+
+  startWindowResize(nativeWindow, direction) {
+    const hitTest = RESIZE_HIT_TESTS[String(direction || '').toLowerCase()];
+    if (!hitTest) return false;
+    return this.startWindowInteraction(nativeWindow, hitTest);
+  }
+
+  startWindowInteraction(nativeWindow, hitTest) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n || !this.isLeftButtonDown()) return false;
 
@@ -58,7 +78,7 @@ class WindowsNativeDragApi {
     const cursorPosition = this.getCursorPos(cursor) ? packScreenPoint(cursor.x, cursor.y) : 0n;
 
     this.releaseCapture();
-    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, HTCAPTION, cursorPosition));
+    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, hitTest, cursorPosition));
   }
 }
 
@@ -254,6 +274,7 @@ module.exports = {
   constants: {
     WM_NCLBUTTONDOWN,
     HTCAPTION,
+    RESIZE_HIT_TESTS,
     VK_LBUTTON,
     SM_CXDOUBLECLK,
     SM_CYDOUBLECLK,

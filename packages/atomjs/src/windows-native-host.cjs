@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { getWindowsNativeDragApi, getWindowsNativeShapeApi } = require('./windows-native-drag.cjs');
+const { resolveAppIdentity } = require('./app-identity.cjs');
 
 let singleton = null;
 
@@ -13,6 +14,7 @@ class WindowsNativeHost {
     this.application = null;
     this.webContext = null;
     this.shapeApi = null;
+    this.appIdentity = null;
     this.webviewDataDirectory = null;
     this.startPromise = null;
     this.windows = new Map();
@@ -51,7 +53,8 @@ class WindowsNativeHost {
     this.application = new binding.Application();
     await this.application.whenReady({ interval: 16, ref: true });
 
-    this.webviewDataDirectory = resolveWritableWebViewDataDirectory();
+    this.appIdentity = resolveAppIdentity();
+    this.webviewDataDirectory = resolveWritableWebViewDataDirectory(this.appIdentity);
     try {
       this.webContext = this.application.createWebContext({
         dataDirectory: this.webviewDataDirectory,
@@ -91,10 +94,10 @@ class WindowsNativeHost {
       // windows on some Windows 11 themes.
       windowsUndecoratedShadow: config.frame !== false,
       windowsSkipTaskbar: Boolean(config.skipTaskbar),
-      windowsClassName: sanitizeWindowsClass(process.env.ATOM_APP_ID || process.env.ATOM_APP_NAME || config.title)
+      windowsClassName: sanitizeWindowsClass(this.appIdentity.appId)
     };
-    if (Number.isFinite(Number(config.x))) nativeOptions.x = Math.round(Number(config.x));
-    if (Number.isFinite(Number(config.y))) nativeOptions.y = Math.round(Number(config.y));
+    if (hasFiniteCoordinate(config.x)) nativeOptions.x = Math.round(Number(config.x));
+    if (hasFiniteCoordinate(config.y)) nativeOptions.y = Math.round(Number(config.y));
     if (parent && parent.nativeWindow && typeof parent.nativeWindow.getNativeHandle === 'function') {
       nativeOptions.windowsOwnerWindow = parent.nativeWindow.getNativeHandle();
     }
@@ -110,7 +113,7 @@ class WindowsNativeHost {
     if (Number(config.maxWidth) > 0 || Number(config.maxHeight) > 0) {
       nativeWindow.setMaxSize(positive(config.maxWidth, 100000), positive(config.maxHeight, 100000), true);
     }
-    if (config.center !== false && !Number.isFinite(Number(config.x)) && !Number.isFinite(Number(config.y))) {
+    if (config.center !== false && !hasFiniteCoordinate(config.x) && !hasFiniteCoordinate(config.y)) {
       nativeWindow.center();
     }
 
@@ -287,6 +290,28 @@ class WindowsNativeHost {
     return true;
   }
 
+  _startRendererWindowResize(record, direction) {
+    if (!record || record.frame || !record.resizable || record.fullscreen || record.nativeResizePending) {
+      return false;
+    }
+    try {
+      if (record.nativeWindow.isMaximized()) return false;
+    } catch {}
+
+    const nativeDrag = getWindowsNativeDragApi();
+    if (!nativeDrag) return false;
+    this._suspendWindowShape(record);
+    record.nativeResizePending = true;
+    record.nativeDragPending = false;
+    if (!nativeDrag.startWindowResize(record.nativeWindow, direction)) {
+      record.nativeResizePending = false;
+      this._scheduleWindowShape(record, 80, true);
+      return false;
+    }
+    this._waitForNativeResizeEnd(record, nativeDrag);
+    return true;
+  }
+
   _waitForNativeResizeEnd(record, nativeDrag) {
     if (!record || !record.nativeResizePending || record.resizeEndTimer) return;
     record.resizeEndTimer = setTimeout(() => {
@@ -373,6 +398,8 @@ class WindowsNativeHost {
         return true;
       case 'start-drag':
         return this._startNativeWindowDrag(record);
+      case 'start-resize':
+        return this._startRendererWindowResize(record, message.direction);
       case 'set-bounds': {
         const bounds = message.bounds || {};
         if (Number.isFinite(Number(bounds.width)) && Number.isFinite(Number(bounds.height))) {
@@ -404,6 +431,7 @@ class WindowsNativeHost {
       try { this.application.exit(); } catch {}
     }
     this.webContext = null;
+    this.appIdentity = null;
     this.webviewDataDirectory = null;
     this.application = null;
     this.startPromise = null;
@@ -414,6 +442,13 @@ class WindowsNativeHost {
 function positive(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function hasFiniteCoordinate(value) {
+  return value !== null &&
+    value !== undefined &&
+    value !== '' &&
+    Number.isFinite(Number(value));
 }
 
 function normalizeCornerRadius(value, fallback) {
@@ -539,14 +574,11 @@ function isSystemDoubleClick(record, point, settings) {
 }
 
 
-function resolveWritableWebViewDataDirectory() {
-  const identity = sanitizePathSegment(
-    process.env.ATOM_APP_ID || process.env.ATOM_APP_NAME || 'AtomJS.App'
-  );
+function resolveWritableWebViewDataDirectory(appIdentity = resolveAppIdentity()) {
   const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const candidates = [
-    path.join(localAppData, identity, 'AtomJS', 'WebView2'),
-    path.join(os.tmpdir(), identity, 'AtomJS', 'WebView2')
+    path.join(localAppData, 'AtomJS', 'Apps', appIdentity.profileKey, 'WebView2'),
+    path.join(os.tmpdir(), 'AtomJS', 'Apps', appIdentity.profileKey, 'WebView2')
   ];
   let lastError;
 
@@ -561,13 +593,6 @@ function resolveWritableWebViewDataDirectory() {
   }
 
   throw new Error(`No writable WebView2 data directory was available: ${lastError ? lastError.message : 'unknown error'}`);
-}
-
-function sanitizePathSegment(value) {
-  return String(value || 'AtomJS.App')
-    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
-    .replace(/[. ]+$/g, '')
-    .slice(0, 120) || 'AtomJS.App';
 }
 
 function sanitizeWindowsClass(value) {
@@ -594,5 +619,6 @@ module.exports = {
   normalizeDragRegions,
   resolveWritableWebViewDataDirectory,
   isSystemDoubleClick,
-  parseColor
+  parseColor,
+  hasFiniteCoordinate
 };

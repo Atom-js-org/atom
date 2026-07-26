@@ -8,12 +8,14 @@ const state = require('./state.cjs');
 const { BridgeServer } = require('./bridge-server.cjs');
 const { stopNativeHost } = require('./native-host.cjs');
 const { stopWindowsNativeHost } = require('./windows-native-host.cjs');
+const { resolveAppIdentity, sanitizeAppId } = require('./app-identity.cjs');
 
 class App extends EventEmitter {
   constructor() {
     super();
     this._readyPromise = null;
-    this._name = readPackageName();
+    this._identity = resolveAppIdentity();
+    this._name = this._identity.appName;
   }
 
   whenReady() {
@@ -63,6 +65,16 @@ class App extends EventEmitter {
     this._name = String(name);
   }
 
+  setAppUserModelId(id) {
+    const appId = sanitizeAppId(id);
+    process.env.ATOM_APP_ID = appId;
+    this._identity = resolveAppIdentity({ appId, appName: this._name });
+  }
+
+  getAppUserModelId() {
+    return this._identity.appId;
+  }
+
   getVersion() {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(state.projectRoot, 'package.json'), 'utf8'));
@@ -83,11 +95,12 @@ class App extends EventEmitter {
       : process.platform === 'darwin'
         ? path.join(home, 'Library', 'Application Support')
         : (process.env.XDG_CONFIG_HOME || path.join(home, '.config'));
+    const userData = path.join(appData, 'AtomJS', 'Apps', this._identity.profileKey);
 
     const table = {
       home,
       appData,
-      userData: path.join(appData, this.getName()),
+      userData,
       temp: os.tmpdir(),
       desktop: path.join(home, 'Desktop'),
       documents: path.join(home, 'Documents'),
@@ -95,20 +108,11 @@ class App extends EventEmitter {
       music: path.join(home, 'Music'),
       pictures: path.join(home, 'Pictures'),
       videos: path.join(home, 'Videos'),
-      logs: path.join(appData, this.getName(), 'logs')
+      logs: path.join(userData, 'logs')
     };
 
     if (!(name in table)) throw new Error(`Unsupported app path: ${name}`);
     return table[name];
-  }
-}
-
-function readPackageName() {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(state.projectRoot, 'package.json'), 'utf8'));
-    return pkg.productName || pkg.name || 'AtomJS App';
-  } catch {
-    return 'AtomJS App';
   }
 }
 

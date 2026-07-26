@@ -12,6 +12,17 @@ const { generateBridgeScript } = require('./bridge-script.cjs');
 const { getNativeHost } = require('./native-host.cjs');
 const { getWindowsNativeHost } = require('./windows-native-host.cjs');
 
+const NATIVE_RESIZE_DIRECTIONS = new Set([
+  'west',
+  'east',
+  'north',
+  'north-west',
+  'north-east',
+  'south',
+  'south-west',
+  'south-east'
+]);
+
 class BrowserWindow extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -128,7 +139,8 @@ class BrowserWindow extends EventEmitter {
       url: this._currentUrl,
       bridgeScript: generateBridgeScript({
         websocketUrl: state.bridgeServer.websocketUrl(this.id),
-        preloadCode
+        preloadCode,
+        nativeResize: process.platform === 'win32' && this.options.frame === false && this.options.resizable
       })
     };
 
@@ -227,6 +239,13 @@ class BrowserWindow extends EventEmitter {
   _startNativeDrag() {
     if (this._destroyed) return false;
     return this._sendHostCommand({ command: 'start-drag' });
+  }
+
+  _startNativeResize(direction) {
+    if (this._destroyed) return false;
+    const normalized = String(direction || '').toLowerCase();
+    if (!NATIVE_RESIZE_DIRECTIONS.has(normalized)) return false;
+    return this._sendHostCommand({ command: 'start-resize', direction: normalized });
   }
 
   _setNativeDragRegions(regions, viewport) {

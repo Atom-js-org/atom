@@ -110,6 +110,8 @@ export const app: EventEmitter & {
   exit(exitCode?: number): never;
   getName(): string;
   setName(name: string): void;
+  setAppUserModelId(id: string): void;
+  getAppUserModelId(): string;
   getVersion(): string;
   getAppPath(): string;
   getPath(name: string): string;

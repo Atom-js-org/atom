@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3-alpha.15
+
+- Routes frameless Windows edge presses through the renderer bridge to the native Win32 resize loop, avoiding WebView2 child-window input interception.
+- Keeps exact rounded regions suspended for the duration of live resize and restores them after the final size settles.
+- Centers Windows windows when `x` and `y` are omitted instead of treating `null` as the explicit position `0,0`.
+- Isolates WebView2 cookies, OAuth state, local storage and AtomJS `userData` by application/project identity.
+- Hides child-process console windows by default in Windows GUI apps, including Java processes started by `minecraft-launcher-core`.
+
 ## 0.5.3-alpha.4
 
 - Fixed Windows custom-titlebar dragging so the Win32 move loop is queued asynchronously with `PostMessageW` instead of blocking Node with `SendMessageW`.

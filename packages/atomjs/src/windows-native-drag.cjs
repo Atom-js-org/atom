@@ -15,7 +15,7 @@ const SM_CXDOUBLECLK = 36;
 const SM_CYDOUBLECLK = 37;
 const DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 const DWMWCP_DEFAULT = 0;
-const DWMWCP_ROUND = 2;
+const DWMWCP_DONOTROUND = 1;
 
 let singleton = null;
 let shapeSingleton = null;
@@ -96,7 +96,22 @@ class WindowsNativeShapeApi {
       throw new TypeError('A Koffi module is required.');
     }
 
+    const user32 = koffi.load('user32.dll');
+    const gdi32 = koffi.load('gdi32.dll');
     const dwmapi = koffi.load('dwmapi.dll');
+    this.createRoundRectRgn = gdi32.func(
+      '__stdcall',
+      'CreateRoundRectRgn',
+      'void *',
+      ['int', 'int', 'int', 'int', 'int', 'int']
+    );
+    this.setWindowRgn = user32.func(
+      '__stdcall',
+      'SetWindowRgn',
+      'int',
+      ['void *', 'void *', 'bool']
+    );
+    this.deleteObject = gdi32.func('__stdcall', 'DeleteObject', 'bool', ['void *']);
     this.dwmSetWindowAttribute = dwmapi.func(
       '__stdcall',
       'DwmSetWindowAttribute',
@@ -108,19 +123,39 @@ class WindowsNativeShapeApi {
   setRoundedCorners(nativeWindow, radius) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n) return false;
-    if (Number(radius) <= 0) return this.clearRoundedCorners(nativeWindow);
+    const logicalRadius = Number(radius);
+    if (!Number.isFinite(logicalRadius) || logicalRadius <= 0) {
+      return this.clearRoundedCorners(nativeWindow);
+    }
 
-    // DWM owns the non-client frame and adjusts it during live resize,
-    // maximization, DPI changes and fullscreen transitions. SetWindowRgn does
-    // not, which is why a manual region caused white seams and broken resizing.
+    const size = nativeWindowSize(nativeWindow);
+    if (!size || size.width < 2 || size.height < 2) return false;
+    const scaleFactor = nativeWindowScaleFactor(nativeWindow);
+    const exactRadius = Math.max(1, Math.min(
+      Math.round(logicalRadius * scaleFactor),
+      Math.floor(Math.min(size.width, size.height) / 2)
+    ));
+    const region = this.createRoundRectRgn(
+      0,
+      0,
+      size.width + 1,
+      size.height + 1,
+      exactRadius * 2,
+      exactRadius * 2
+    );
+    if (!region) return false;
+
+    // DWM only supports system-defined corner sizes. Disable its automatic
+    // radius while the exact application radius is represented by an HRGN.
+    this.setDwmCornerPreference(handle, DWMWCP_DONOTROUND);
     try {
-      return Number(this.dwmSetWindowAttribute(
-        handle,
-        DWMWA_WINDOW_CORNER_PREFERENCE,
-        [DWMWCP_ROUND],
-        4
-      )) === 0;
+      const applied = Number(this.setWindowRgn(handle, region, true)) !== 0;
+      if (!applied) {
+        try { this.deleteObject(region); } catch {}
+      }
+      return applied;
     } catch {
+      try { this.deleteObject(region); } catch {}
       return false;
     }
   }
@@ -128,16 +163,23 @@ class WindowsNativeShapeApi {
   clearRoundedCorners(nativeWindow) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n) return false;
+    let cleared = false;
+    try {
+      cleared = Number(this.setWindowRgn(handle, null, true)) !== 0;
+    } catch {}
+    const resetDwm = this.setDwmCornerPreference(handle, DWMWCP_DEFAULT);
+    return cleared || resetDwm;
+  }
+
+  setDwmCornerPreference(handle, preference) {
     try {
       return Number(this.dwmSetWindowAttribute(
         handle,
         DWMWA_WINDOW_CORNER_PREFERENCE,
-        [DWMWCP_DEFAULT],
+        [preference],
         4
       )) === 0;
-    } catch {
-      return false;
-    }
+    } catch { return false; }
   }
 }
 
@@ -171,6 +213,24 @@ function nativeWindowHandle(nativeWindow) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function nativeWindowSize(nativeWindow) {
+  try {
+    const size = nativeWindow.getOuterSize(false);
+    const width = Math.round(Number(size && size.width));
+    const height = Math.round(Number(size && size.height));
+    if (width > 0 && height > 0) return { width, height };
+  } catch {}
+  return null;
+}
+
+function nativeWindowScaleFactor(nativeWindow) {
+  try {
+    const scaleFactor = Number(nativeWindow.scaleFactor());
+    if (Number.isFinite(scaleFactor) && scaleFactor > 0) return scaleFactor;
+  } catch {}
+  return 1;
 }
 
 function getWindowsNativeDragApi() {
@@ -235,6 +295,6 @@ module.exports = {
     SM_CYDOUBLECLK,
     DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_DEFAULT,
-    DWMWCP_ROUND
+    DWMWCP_DONOTROUND
   }
 };

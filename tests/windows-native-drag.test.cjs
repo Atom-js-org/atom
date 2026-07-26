@@ -41,17 +41,24 @@ function fakeKoffi(overrides = {}) {
   };
 }
 
-function fakeDwmKoffi() {
+function fakeShapeKoffi() {
   const calls = [];
+  const region = 0x9000n;
+  const functions = {
+    CreateRoundRectRgn: (...args) => { calls.push(['CreateRoundRectRgn', ...args]); return region; },
+    SetWindowRgn: (...args) => { calls.push(['SetWindowRgn', ...args]); return 1; },
+    DeleteObject: (...args) => { calls.push(['DeleteObject', ...args]); return true; },
+    DwmSetWindowAttribute: (...args) => { calls.push(['DwmSetWindowAttribute', ...args]); return 0; }
+  };
   return {
     calls,
     module: {
       load(name) {
-        assert.equal(name, 'dwmapi.dll');
+        assert.ok(['user32.dll', 'gdi32.dll', 'dwmapi.dll'].includes(name));
         return {
           func(_convention, name) {
-            assert.equal(name, 'DwmSetWindowAttribute');
-            return (...args) => { calls.push(args); return 0; };
+            assert.equal(typeof functions[name], 'function', `unexpected native function ${name}`);
+            return functions[name];
           }
         };
       }
@@ -98,16 +105,23 @@ test('Windows native handles remain pointer-sized BigInts', () => {
   assert.equal(nativeWindowHandle(null), 0n);
 });
 
-test('Windows 11 uses DWM corner preferences instead of clipping the window region', () => {
-  const fake = fakeDwmKoffi();
+test('Windows 11 preserves the exact configured radius after native state changes', () => {
+  const fake = fakeShapeKoffi();
   const api = new WindowsNativeShapeApi(fake.module);
-  const win = { getNativeHandleAnyThread: () => 0x1234n };
+  const win = {
+    getNativeHandleAnyThread: () => 0x1234n,
+    getOuterSize: () => ({ width: 800, height: 600 }),
+    scaleFactor: () => 1.5
+  };
 
   assert.equal(api.setRoundedCorners(win, 18), true);
   assert.equal(api.clearRoundedCorners(win), true);
   assert.deepEqual(fake.calls, [
-    [0x1234n, constants.DWMWA_WINDOW_CORNER_PREFERENCE, [constants.DWMWCP_ROUND], 4],
-    [0x1234n, constants.DWMWA_WINDOW_CORNER_PREFERENCE, [constants.DWMWCP_DEFAULT], 4]
+    ['CreateRoundRectRgn', 0, 0, 801, 601, 54, 54],
+    ['DwmSetWindowAttribute', 0x1234n, constants.DWMWA_WINDOW_CORNER_PREFERENCE, [constants.DWMWCP_DONOTROUND], 4],
+    ['SetWindowRgn', 0x1234n, 0x9000n, true],
+    ['SetWindowRgn', 0x1234n, null, true],
+    ['DwmSetWindowAttribute', 0x1234n, constants.DWMWA_WINDOW_CORNER_PREFERENCE, [constants.DWMWCP_DEFAULT], 4]
   ]);
 });
 

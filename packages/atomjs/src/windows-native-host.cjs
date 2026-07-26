@@ -135,6 +135,8 @@ class WindowsNativeHost {
       },
       lastDragClick: null,
       nativeDragPending: false,
+      nativeResizePending: false,
+      resizeEndTimer: null,
       fullscreen: false,
       frame: config.frame !== false,
       resizable: config.resizable !== false,
@@ -157,13 +159,14 @@ class WindowsNativeHost {
 
     record.nativeWindow.on('close', () => {
       if (record.shapeRefreshTimer) clearTimeout(record.shapeRefreshTimer);
+      if (record.resizeEndTimer) clearTimeout(record.resizeEndTimer);
       try { record.atomWindow._handleHostEvent({ type: 'closed', windowId }); } catch {}
       this.windows.delete(windowId);
     });
     record.nativeWindow.on('focus', () => emit({ type: 'focus' }));
     record.nativeWindow.on('blur', () => emit({ type: 'blur' }));
     record.nativeWindow.on('move', (event) => {
-      if (record.nativeDragPending) {
+      if (record.nativeDragPending && !record.nativeResizePending) {
         record.nativeDragPending = false;
         record.lastDragClick = null;
       }
@@ -175,13 +178,16 @@ class WindowsNativeHost {
       });
     });
     record.nativeWindow.on('resize', (event) => {
-      this._scheduleWindowShape(record);
+      if (!record.nativeResizePending) this._scheduleWindowShape(record, 16, true);
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
         type: 'bounds-changed',
         reason: 'resize',
         bounds: { width: Number(event.width) / scale, height: Number(event.height) / scale }
       });
+    });
+    record.nativeWindow.on('scale-factor-changed', () => {
+      if (!record.nativeResizePending) this._scheduleWindowShape(record, 16, true);
     });
     record.nativeWindow.on('mouse-down', (event) => {
       if (Number(event.button) !== 0) return;
@@ -196,7 +202,9 @@ class WindowsNativeHost {
       this._startNativeWindowDrag(record, point);
     });
     record.nativeWindow.on('mouse-up', (event) => {
-      if (Number(event.button) === 0) record.nativeDragPending = false;
+      if (Number(event.button) !== 0) return;
+      record.nativeDragPending = false;
+      if (record.nativeResizePending) this._finishNativeWindowResize(record);
     });
     record.webview.on('page-load-started', (event) => emit({ type: 'did-start-loading', url: event.url || '' }));
     record.webview.on('page-load-finished', (event) => emit({ type: 'did-finish-load', url: event.url || '' }));
@@ -210,7 +218,7 @@ class WindowsNativeHost {
 
     let maximized = false;
     try { maximized = record.nativeWindow.isMaximized() === true; } catch {}
-    if (record.fullscreen || maximized) {
+    if (record.fullscreen || maximized || record.nativeResizePending) {
       try { this.shapeApi.clearRoundedCorners(record.nativeWindow); } catch {}
       return;
     }
@@ -218,12 +226,17 @@ class WindowsNativeHost {
     try { this.shapeApi.setRoundedCorners(record.nativeWindow, record.cornerRadius); } catch {}
   }
 
-  _scheduleWindowShape(record) {
-    if (!record || record.shapeRefreshTimer) return;
+  _scheduleWindowShape(record, delay = 0, replace = false) {
+    if (!record || record.nativeResizePending) return;
+    if (record.shapeRefreshTimer) {
+      if (!replace) return;
+      clearTimeout(record.shapeRefreshTimer);
+      record.shapeRefreshTimer = null;
+    }
     record.shapeRefreshTimer = setTimeout(() => {
       record.shapeRefreshTimer = null;
       this._applyWindowShape(record);
-    }, 0);
+    }, Math.max(0, Number(delay) || 0));
     record.shapeRefreshTimer.unref?.();
   }
 
@@ -231,15 +244,19 @@ class WindowsNativeHost {
     // SpaceClient and Electron-compatible apps may both request a drag: one
     // through app-region metadata and one through startDrag(). Do not enqueue
     // two Win32 move messages for the same mouse press.
-    if (record.nativeDragPending) return true;
+    if (record.nativeDragPending || record.nativeResizePending) return true;
 
     const nativeDrag = getWindowsNativeDragApi();
     if (!nativeDrag) return false;
 
     if (point && isSystemDoubleClick(record, point, nativeDrag.doubleClickSettings())) {
       record.lastDragClick = null;
-      try { record.nativeWindow.setMaximized(!record.nativeWindow.isMaximized()); } catch {}
-      this._scheduleWindowShape(record);
+      try {
+        const maximize = !record.nativeWindow.isMaximized();
+        this._suspendWindowShape(record);
+        record.nativeWindow.setMaximized(maximize);
+      } catch {}
+      this._scheduleWindowShape(record, 64, true);
       return true;
     }
 
@@ -253,11 +270,50 @@ class WindowsNativeHost {
   }
 
   _startNativeWindowResize(record, hitTest) {
-    if (record.nativeDragPending) return true;
+    if (record.nativeDragPending || record.nativeResizePending) return true;
     const nativeDrag = getWindowsNativeDragApi();
-    if (!nativeDrag || !nativeDrag.startWindowResize(record.nativeWindow, hitTest)) return false;
+    if (!nativeDrag) return false;
+    this._suspendWindowShape(record);
+    record.nativeResizePending = true;
+    if (!nativeDrag.startWindowResize(record.nativeWindow, hitTest)) {
+      record.nativeResizePending = false;
+      this._scheduleWindowShape(record, 16, true);
+      return false;
+    }
     record.nativeDragPending = true;
+    this._waitForNativeResizeEnd(record, nativeDrag);
     return true;
+  }
+
+  _waitForNativeResizeEnd(record, nativeDrag) {
+    if (!record || !record.nativeResizePending || record.resizeEndTimer) return;
+    record.resizeEndTimer = setTimeout(() => {
+      record.resizeEndTimer = null;
+      if (!record.nativeResizePending || !this.windows.has(record.windowId)) return;
+      let buttonDown = false;
+      try { buttonDown = nativeDrag.isLeftButtonDown(); } catch {}
+      if (buttonDown) this._waitForNativeResizeEnd(record, nativeDrag);
+      else this._finishNativeWindowResize(record);
+    }, 16);
+    record.resizeEndTimer.unref?.();
+  }
+
+  _finishNativeWindowResize(record) {
+    if (!record) return;
+    if (record.resizeEndTimer) clearTimeout(record.resizeEndTimer);
+    record.resizeEndTimer = null;
+    record.nativeResizePending = false;
+    record.nativeDragPending = false;
+    this._scheduleWindowShape(record, 16, true);
+  }
+
+  _suspendWindowShape(record) {
+    if (!record || record.cornerRadius <= 0) return;
+    if (record.shapeRefreshTimer) clearTimeout(record.shapeRefreshTimer);
+    record.shapeRefreshTimer = null;
+    if (!this.shapeApi) this.shapeApi = getWindowsNativeShapeApi();
+    if (!this.shapeApi) return;
+    try { this.shapeApi.clearRoundedCorners(record.nativeWindow); } catch {}
   }
 
   send(message) {
@@ -274,6 +330,8 @@ class WindowsNativeHost {
       case 'close': win.close(); return true;
       case 'destroy':
         this.windows.delete(Number(message.windowId));
+        if (record.shapeRefreshTimer) clearTimeout(record.shapeRefreshTimer);
+        if (record.resizeEndTimer) clearTimeout(record.resizeEndTimer);
         try { view.dispose(); } catch {}
         try { win.dispose(); } catch {}
         return true;
@@ -284,24 +342,28 @@ class WindowsNativeHost {
         win.setResizable(record.resizable);
         return true;
       case 'fullscreen':
+        this._suspendWindowShape(record);
         record.fullscreen = Boolean(message.value);
         win.setFullscreen(message.value ? this.binding.FullscreenType.Borderless : null);
-        this._scheduleWindowShape(record);
+        this._scheduleWindowShape(record, 64, true);
         return true;
       case 'maximize':
+        this._suspendWindowShape(record);
         win.setMaximized(true);
-        this._scheduleWindowShape(record);
+        this._scheduleWindowShape(record, 64, true);
         return true;
       case 'unmaximize':
+        this._suspendWindowShape(record);
         win.setMaximized(false);
-        this._scheduleWindowShape(record);
+        this._scheduleWindowShape(record, 64, true);
         return true;
       case 'minimize': win.setMinimized(true); return true;
       case 'restore':
+        this._suspendWindowShape(record);
         win.setMinimized(false);
         win.setMaximized(false);
         win.show();
-        this._scheduleWindowShape(record);
+        this._scheduleWindowShape(record, 64, true);
         return true;
       case 'set-drag-regions':
         record.dragRegions = normalizeDragRegions(message.regions);
@@ -327,6 +389,8 @@ class WindowsNativeHost {
     if (this.stopping) return;
     this.stopping = true;
     for (const record of this.windows.values()) {
+      if (record.shapeRefreshTimer) clearTimeout(record.shapeRefreshTimer);
+      if (record.resizeEndTimer) clearTimeout(record.resizeEndTimer);
       try { record.webview.dispose(); } catch {}
       try { record.nativeWindow.dispose(); } catch {}
     }

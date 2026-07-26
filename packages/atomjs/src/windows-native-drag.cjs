@@ -2,6 +2,14 @@
 
 const WM_NCLBUTTONDOWN = 0x00A1;
 const HTCAPTION = 2;
+const HTLEFT = 10;
+const HTRIGHT = 11;
+const HTTOP = 12;
+const HTTOPLEFT = 13;
+const HTTOPRIGHT = 14;
+const HTBOTTOM = 15;
+const HTBOTTOMLEFT = 16;
+const HTBOTTOMRIGHT = 17;
 const VK_LBUTTON = 0x01;
 const SM_CXDOUBLECLK = 36;
 const SM_CYDOUBLECLK = 37;
@@ -47,6 +55,15 @@ class WindowsNativeDragApi {
   }
 
   startWindowDrag(nativeWindow) {
+    return this.startWindowInteraction(nativeWindow, HTCAPTION);
+  }
+
+  startWindowResize(nativeWindow, hitTest) {
+    if (!RESIZE_HIT_TESTS.has(Number(hitTest))) return false;
+    return this.startWindowInteraction(nativeWindow, Number(hitTest));
+  }
+
+  startWindowInteraction(nativeWindow, hitTest) {
     const handle = nativeWindowHandle(nativeWindow);
     if (handle === 0n || !this.isLeftButtonDown()) return false;
 
@@ -58,9 +75,20 @@ class WindowsNativeDragApi {
     const cursorPosition = this.getCursorPos(cursor) ? packScreenPoint(cursor.x, cursor.y) : 0n;
 
     this.releaseCapture();
-    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, HTCAPTION, cursorPosition));
+    return Boolean(this.postMessageW(handle, WM_NCLBUTTONDOWN, hitTest, cursorPosition));
   }
 }
+
+const RESIZE_HIT_TESTS = new Set([
+  HTLEFT,
+  HTRIGHT,
+  HTTOP,
+  HTTOPLEFT,
+  HTTOPRIGHT,
+  HTBOTTOM,
+  HTBOTTOMLEFT,
+  HTBOTTOMRIGHT
+]);
 
 class WindowsNativeShapeApi {
   constructor(koffi) {
@@ -194,6 +222,14 @@ module.exports = {
   constants: {
     WM_NCLBUTTONDOWN,
     HTCAPTION,
+    HTLEFT,
+    HTRIGHT,
+    HTTOP,
+    HTTOPLEFT,
+    HTTOPRIGHT,
+    HTBOTTOM,
+    HTBOTTOMLEFT,
+    HTBOTTOMRIGHT,
     VK_LBUTTON,
     SM_CXDOUBLECLK,
     SM_CYDOUBLECLK,

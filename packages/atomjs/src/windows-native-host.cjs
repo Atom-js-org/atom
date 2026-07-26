@@ -136,6 +136,9 @@ class WindowsNativeHost {
       lastDragClick: null,
       nativeDragPending: false,
       fullscreen: false,
+      frame: config.frame !== false,
+      resizable: config.resizable !== false,
+      shapeRefreshTimer: null,
       cornerRadius: normalizeCornerRadius(config.cornerRadius, config.frame === false ? 18 : 0)
     };
     this.windows.set(Number(config.windowId), record);
@@ -153,6 +156,7 @@ class WindowsNativeHost {
     };
 
     record.nativeWindow.on('close', () => {
+      if (record.shapeRefreshTimer) clearTimeout(record.shapeRefreshTimer);
       try { record.atomWindow._handleHostEvent({ type: 'closed', windowId }); } catch {}
       this.windows.delete(windowId);
     });
@@ -171,7 +175,7 @@ class WindowsNativeHost {
       });
     });
     record.nativeWindow.on('resize', (event) => {
-      this._applyWindowShape(record);
+      this._scheduleWindowShape(record);
       const scale = safeScaleFactor(record.nativeWindow);
       emit({
         type: 'bounds-changed',
@@ -182,7 +186,13 @@ class WindowsNativeHost {
     record.nativeWindow.on('mouse-down', (event) => {
       if (Number(event.button) !== 0) return;
       const point = physicalPoint(event);
-      if (!point || !isDraggablePoint(record, point)) return;
+      if (!point) return;
+      const resizeHitTest = resizeHitTestForPoint(record, point);
+      if (resizeHitTest) {
+        this._startNativeWindowResize(record, resizeHitTest);
+        return;
+      }
+      if (!isDraggablePoint(record, point)) return;
       this._startNativeWindowDrag(record, point);
     });
     record.nativeWindow.on('mouse-up', (event) => {
@@ -208,6 +218,15 @@ class WindowsNativeHost {
     try { this.shapeApi.setRoundedCorners(record.nativeWindow, record.cornerRadius); } catch {}
   }
 
+  _scheduleWindowShape(record) {
+    if (!record || record.shapeRefreshTimer) return;
+    record.shapeRefreshTimer = setTimeout(() => {
+      record.shapeRefreshTimer = null;
+      this._applyWindowShape(record);
+    }, 0);
+    record.shapeRefreshTimer.unref?.();
+  }
+
   _startNativeWindowDrag(record, point = null) {
     // SpaceClient and Electron-compatible apps may both request a drag: one
     // through app-region metadata and one through startDrag(). Do not enqueue
@@ -220,6 +239,7 @@ class WindowsNativeHost {
     if (point && isSystemDoubleClick(record, point, nativeDrag.doubleClickSettings())) {
       record.lastDragClick = null;
       try { record.nativeWindow.setMaximized(!record.nativeWindow.isMaximized()); } catch {}
+      this._scheduleWindowShape(record);
       return true;
     }
 
@@ -228,6 +248,14 @@ class WindowsNativeHost {
 
     // The Win32 move loop is queued asynchronously. Native move events keep the
     // BrowserWindow bounds synchronized while Windows owns the pointer.
+    record.nativeDragPending = true;
+    return true;
+  }
+
+  _startNativeWindowResize(record, hitTest) {
+    if (record.nativeDragPending) return true;
+    const nativeDrag = getWindowsNativeDragApi();
+    if (!nativeDrag || !nativeDrag.startWindowResize(record.nativeWindow, hitTest)) return false;
     record.nativeDragPending = true;
     return true;
   }
@@ -251,25 +279,29 @@ class WindowsNativeHost {
         return true;
       case 'set-title': win.setTitle(String(message.title || '')); return true;
       case 'set-always-on-top': win.setAlwaysOnTop(Boolean(message.value)); return true;
-      case 'set-resizable': win.setResizable(Boolean(message.value)); return true;
+      case 'set-resizable':
+        record.resizable = Boolean(message.value);
+        win.setResizable(record.resizable);
+        return true;
       case 'fullscreen':
         record.fullscreen = Boolean(message.value);
         win.setFullscreen(message.value ? this.binding.FullscreenType.Borderless : null);
-        this._applyWindowShape(record);
+        this._scheduleWindowShape(record);
         return true;
       case 'maximize':
         win.setMaximized(true);
-        this._applyWindowShape(record);
+        this._scheduleWindowShape(record);
         return true;
       case 'unmaximize':
         win.setMaximized(false);
-        this._applyWindowShape(record);
+        this._scheduleWindowShape(record);
         return true;
       case 'minimize': win.setMinimized(true); return true;
       case 'restore':
         win.setMinimized(false);
         win.setMaximized(false);
         win.show();
+        this._scheduleWindowShape(record);
         return true;
       case 'set-drag-regions':
         record.dragRegions = normalizeDragRegions(message.regions);
@@ -376,6 +408,34 @@ function physicalPoint(event) {
   const y = Number(event && event.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return { x, y };
+}
+
+function resizeHitTestForPoint(record, point) {
+  if (!record || record.frame || !record.resizable || record.fullscreen) return 0;
+  try {
+    if (record.nativeWindow.isMaximized()) return 0;
+    const size = record.nativeWindow.getInnerSize(false);
+    const width = Number(size && size.width);
+    const height = Number(size && size.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 0;
+
+    // BrowserWindow mouse coordinates are physical pixels. Use an 8 CSS-pixel
+    // target scaled to the active monitor so resize works on HiDPI displays.
+    const edge = Math.max(6, Math.round(8 * safeScaleFactor(record.nativeWindow)));
+    const left = point.x <= edge;
+    const right = point.x >= width - edge;
+    const top = point.y <= edge;
+    const bottom = point.y >= height - edge;
+    if (top && left) return 13;
+    if (top && right) return 14;
+    if (bottom && left) return 16;
+    if (bottom && right) return 17;
+    if (left) return 10;
+    if (right) return 11;
+    if (top) return 12;
+    if (bottom) return 15;
+  } catch {}
+  return 0;
 }
 
 function normalizeDragRegions(regions) {

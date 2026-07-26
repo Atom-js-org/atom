@@ -76,6 +76,16 @@ test('Windows drag does not enter move mode after the left button was released',
   assert.deepEqual(fake.calls, []);
 });
 
+test('Windows resize uses the matching native non-client hit test', () => {
+  const fake = fakeKoffi();
+  const api = new WindowsNativeDragApi(fake.module);
+  const win = { getNativeHandleAnyThread: () => 0x1234n };
+
+  assert.equal(api.startWindowResize(win, constants.HTBOTTOMRIGHT), true);
+  assert.equal(api.startWindowResize(win, constants.HTCAPTION), false);
+  assert.deepEqual(fake.calls, [['ReleaseCapture'], ['PostMessageW']]);
+});
+
 test('Win32 screen coordinates preserve negative multi-monitor positions', () => {
   const packed = packScreenPoint(-120, -45);
   assert.equal(Number(BigInt.asIntN(16, packed)), -120);

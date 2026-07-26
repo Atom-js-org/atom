@@ -271,10 +271,13 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   assert.match(windowsHost, /setUndecoratedShadow\(false\)/);
   assert.match(windowsHost, /clearRoundedCorners/);
   assert.match(windowsHost, /isMaximized\(\)/);
+  assert.match(windowsHost, /resizeHitTestForPoint/);
+  assert.match(windowsHost, /_startNativeWindowResize/);
   assert.match(windowsHost, /getWindowsNativeDragApi\(\)/);
   assert.match(windowsDrag, /WM_NCLBUTTONDOWN/);
   assert.match(windowsDrag, /ReleaseCapture/);
   assert.match(windowsDrag, /PostMessageW/);
+  assert.match(windowsDrag, /HTBOTTOMRIGHT/);
   assert.doesNotMatch(windowsDrag, /new Worker\(WINDOWS_DRAG_WORKER/);
   assert.match(windowsDrag, /DwmSetWindowAttribute/);
   assert.doesNotMatch(windowsDrag, /'SetWindowRgn'/);

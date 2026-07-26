@@ -135,6 +135,7 @@ class WindowsNativeHost {
       },
       lastDragClick: null,
       nativeDragPending: false,
+      fullscreen: false,
       cornerRadius: normalizeCornerRadius(config.cornerRadius, config.frame === false ? 18 : 0)
     };
     this.windows.set(Number(config.windowId), record);
@@ -196,6 +197,14 @@ class WindowsNativeHost {
     if (!record || record.cornerRadius <= 0) return;
     if (!this.shapeApi) this.shapeApi = getWindowsNativeShapeApi();
     if (!this.shapeApi) return;
+
+    let maximized = false;
+    try { maximized = record.nativeWindow.isMaximized() === true; } catch {}
+    if (record.fullscreen || maximized) {
+      try { this.shapeApi.clearRoundedCorners(record.nativeWindow); } catch {}
+      return;
+    }
+
     try { this.shapeApi.setRoundedCorners(record.nativeWindow, record.cornerRadius); } catch {}
   }
 
@@ -244,10 +253,18 @@ class WindowsNativeHost {
       case 'set-always-on-top': win.setAlwaysOnTop(Boolean(message.value)); return true;
       case 'set-resizable': win.setResizable(Boolean(message.value)); return true;
       case 'fullscreen':
+        record.fullscreen = Boolean(message.value);
         win.setFullscreen(message.value ? this.binding.FullscreenType.Borderless : null);
+        this._applyWindowShape(record);
         return true;
-      case 'maximize': win.setMaximized(true); return true;
-      case 'unmaximize': win.setMaximized(false); return true;
+      case 'maximize':
+        win.setMaximized(true);
+        this._applyWindowShape(record);
+        return true;
+      case 'unmaximize':
+        win.setMaximized(false);
+        this._applyWindowShape(record);
+        return true;
       case 'minimize': win.setMinimized(true); return true;
       case 'restore':
         win.setMinimized(false);

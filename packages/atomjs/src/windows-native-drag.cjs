@@ -111,6 +111,15 @@ class WindowsNativeShapeApi {
     }
     return applied;
   }
+
+  clearRoundedCorners(nativeWindow) {
+    const handle = nativeWindowHandle(nativeWindow);
+    if (handle === 0n) return false;
+    // Passing NULL removes the HRGN owned by the window. Maximized and
+    // fullscreen windows must be rectangular or DWM can expose a bright
+    // backdrop through the clipped corners.
+    try { return Number(this.setWindowRgn(handle, null, true)) !== 0; } catch { return false; }
+  }
 }
 
 function packScreenPoint(x, y) {

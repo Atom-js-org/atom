@@ -267,6 +267,8 @@ test('Windows uses one in-process prebuilt native host instead of one Node helpe
   const windowsDrag = fs.readFileSync(path.join(__dirname, '..', 'packages', 'atomjs', 'src', 'windows-native-drag.cjs'), 'utf8');
   assert.match(windowsHost, /case 'set-drag-regions'/);
   assert.match(windowsHost, /case 'start-drag'/);
+  assert.match(windowsHost, /windowsUndecoratedShadow/);
+  assert.match(windowsHost, /setUndecoratedShadow\(false\)/);
   assert.match(windowsHost, /getWindowsNativeDragApi\(\)/);
   assert.match(windowsDrag, /WM_NCLBUTTONDOWN/);
   assert.match(windowsDrag, /ReleaseCapture/);

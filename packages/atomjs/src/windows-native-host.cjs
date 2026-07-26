@@ -86,6 +86,10 @@ class WindowsNativeHost {
       minimizable: config.minimizable !== false,
       focused: config.focusable !== false,
       transparent: Boolean(config.transparent),
+      // Frameless windows draw their own CSS/native shape. Letting Tao/DWM add
+      // the undecorated shadow leaves a bright edge around rounded WebView2
+      // windows on some Windows 11 themes.
+      windowsUndecoratedShadow: config.frame !== false,
       windowsSkipTaskbar: Boolean(config.skipTaskbar),
       windowsClassName: sanitizeWindowsClass(process.env.ATOM_APP_ID || process.env.ATOM_APP_NAME || config.title)
     };
@@ -96,6 +100,9 @@ class WindowsNativeHost {
     }
 
     const nativeWindow = this.application.createBrowserWindow(nativeOptions);
+    if (config.frame === false && typeof nativeWindow.setUndecoratedShadow === 'function') {
+      try { nativeWindow.setUndecoratedShadow(false); } catch {}
+    }
     nativeWindow.setClosable(config.closable !== false);
     if (Number(config.minWidth) > 0 || Number(config.minHeight) > 0) {
       nativeWindow.setMinSize(positive(config.minWidth, 1), positive(config.minHeight, 1), true);
